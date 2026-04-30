@@ -347,7 +347,7 @@ nav { display: grid; gap: 8px; }
 .list-panel { padding: 12px; min-width: 0; overflow-x: auto; }
 .filters {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) repeat(3, 98px) minmax(320px, 360px) minmax(230px, 270px);
+  grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(230px, 270px);
   gap: 10px;
   align-items: end;
   margin-bottom: 14px;
@@ -368,27 +368,37 @@ nav { display: grid; gap: 8px; }
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 4px;
+  padding: 0 6px;
   cursor: pointer;
+  position: relative;
 }
-.date-range input {
+.date-range button {
   min-width: 0;
-  width: 100%;
-  border: 0;
-  outline: 0;
+  height: 26px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
   color: #68758b;
-  font-size: 12px;
-  background: transparent;
-  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
 }
-.date-range input::-webkit-calendar-picker-indicator {
-  cursor: pointer;
-  opacity: .72;
-}
+.date-range button:hover { background: #f4f6fb; color: var(--purple); }
+.date-range button svg { flex: 0 0 auto; color: #8c96aa; pointer-events: none; }
+.date-range button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
 .date-range b {
   font-weight: 800;
   color: #9aa4b6;
+  line-height: 1;
+}
+.date-range input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 .filters-actions {
   display: grid;
@@ -885,7 +895,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .sale-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
   .settings-admin-grid { grid-template-columns: 1fr; }
   .push-settings-grid { grid-template-columns: 1fr; }
-  .filters { grid-template-columns: minmax(220px, 280px) repeat(3, 98px) minmax(320px, 360px) minmax(230px, 270px); }
+  .filters { grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(230px, 270px); }
 }
 
 @media (max-width: 900px) {
@@ -899,7 +909,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .dashboard-grid, .bottom-grid, .list-layout, .workbench-grid, .form-grid, .sale-grid, .settlement-cards { grid-template-columns: 1fr; }
   .wide { grid-column: auto; }
   .filters {
-    grid-template-columns: minmax(220px, 280px) repeat(3, 98px) minmax(320px, 360px) minmax(230px, 270px);
+    grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(230px, 270px);
     min-width: max-content;
   }
   .product-table { min-width: 900px; }

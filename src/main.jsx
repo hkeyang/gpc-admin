@@ -130,9 +130,9 @@ function openNativePicker(input) {
 }
 
 function openRangePicker(event, fromInput, toInput) {
-  const clickedInput = event.target?.tagName === 'INPUT' ? event.target : null;
-  if (clickedInput) {
-    openNativePicker(clickedInput);
+  const targetPicker = event.target?.closest?.('[data-picker]');
+  if (targetPicker) {
+    openNativePicker(targetPicker.dataset.picker === 'to' ? toInput : fromInput);
     return;
   }
   const { left, width } = event.currentTarget.getBoundingClientRect();
@@ -344,6 +344,13 @@ function productStatus(product) {
 
 function productDateValue(product) {
   return String(product.createdAt || '').slice(0, 10);
+}
+
+function compactDateLabel(value, fallback) {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  const [, month, day] = text.split('-');
+  return month && day ? `${month}/${day}` : fallback;
 }
 
 function downloadCsv(filename, rows) {
@@ -1050,7 +1057,7 @@ function ProductsPage({ products, pushTemplate, onOpenWorkbench, onAddProduct })
 
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
-      const keywordText = [item.id, item.account, item.phone, item.vpsRemoteUrl].join(' ').toLowerCase();
+      const keywordText = [item.id, item.account, item.phone].join(' ').toLowerCase();
       const matchesKeyword = keywordText.includes(keyword.toLowerCase());
       const matchesSale = saleFilter === '全部' || (saleFilter === '待售' ? !item.isSold : item.isSold);
       const matchesPaid = paidFilter === '全部' || (paidFilter === '未回款' ? !item.isPaid : item.isPaid);
@@ -1107,7 +1114,7 @@ function ProductsPage({ products, pushTemplate, onOpenWorkbench, onAddProduct })
       <div className="list-layout">
         <Panel className="list-panel">
           <div className="filters">
-            <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索 ID / 账号 / 手机号 / 远程链接" /></label>
+            <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索 ID / 账号 / 手机号" /></label>
             <FilterSelect label="销售状态" value={saleFilter} onChange={setSaleFilter} options={['全部', '待售', '已售']} />
             <FilterSelect label="回款状态" value={paidFilter} onChange={setPaidFilter} options={['全部', '未回款', '已回款']} />
             <FilterSelect label="结算状态" value={settlementFilter} onChange={setSettlementFilter} options={['全部', '未结算', '已结算']} />
@@ -1173,8 +1180,16 @@ function DateRangeFilter({ from, to, onFromChange, onToChange }) {
     <div className="date-filter">
       <span>上架时间</span>
       <div className="date-range" onClick={(event) => openRangePicker(event, fromInputRef.current, toInputRef.current)}>
-        <input ref={fromInputRef} aria-label="开始日期" type="date" value={from} max={to || undefined} onChange={(event) => onFromChange(event.target.value)} />
+        <button type="button" data-picker="from">
+          <Calendar size={14} />
+          <span>{compactDateLabel(from, '开始')}</span>
+        </button>
         <b>~</b>
+        <button type="button" data-picker="to">
+          <Calendar size={14} />
+          <span>{compactDateLabel(to, '结束')}</span>
+        </button>
+        <input ref={fromInputRef} aria-label="开始日期" type="date" value={from} max={to || undefined} onChange={(event) => onFromChange(event.target.value)} />
         <input ref={toInputRef} aria-label="结束日期" type="date" value={to} min={from || undefined} onChange={(event) => onToChange(event.target.value)} />
       </div>
     </div>
