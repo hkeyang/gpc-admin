@@ -21,6 +21,9 @@ export class AuthStore {
       if (!user || user.status !== 'active' || !deviceId) {
         return json({ message: '账号、密码或设备信息错误' }, 401);
       }
+      if (!isSupportedPbkdf2Hash(user.passwordHash)) {
+        return json({ message: '密码哈希配置不兼容 Cloudflare，请用最新版 npm run hash-secret 重新生成 SUPER_ADMIN_PASSWORD_HASH' }, 503);
+      }
 
       const passwordOk = await verifyPbkdf2(password, user.passwordHash);
       if (!passwordOk) return json({ message: '账号、密码或设备信息错误' }, 401);
@@ -112,11 +115,17 @@ export class AuthStore {
 
   async ensureSuperAdmin() {
     const username = this.env.SUPER_ADMIN_USERNAME || this.env.ADMIN_USERNAME || 'admin';
-    const existing = await this.state.storage.get(`user:${username}`);
-    if (existing) return;
-
     const passwordHash = this.env.SUPER_ADMIN_PASSWORD_HASH || this.env.ADMIN_PASSWORD_HASH;
     if (!passwordHash) return;
+    const existing = await this.state.storage.get(`user:${username}`);
+    if (existing) {
+      if (existing.role === 'super_admin' && existing.passwordHash !== passwordHash) {
+        existing.passwordHash = passwordHash;
+        existing.updatedAt = new Date().toISOString();
+        await this.state.storage.put(`user:${username}`, existing);
+      }
+      return;
+    }
 
     await this.state.storage.put(`user:${username}`, {
       id: crypto.randomUUID(),
@@ -322,7 +331,7 @@ async function hmac(value, secret) {
 }
 
 async function hashPbkdf2(password) {
-  const iterations = 310000;
+  const iterations = 100000;
   const salt = base64UrlEncodeBytes(crypto.getRandomValues(new Uint8Array(16)));
   const key = await crypto.subtle.importKey(
     'raw',
@@ -350,7 +359,7 @@ async function verifyPbkdf2(password, storedHash) {
   const iterations = Number(parts[1]);
   const salt = parts[2];
   const expectedHash = parts[3];
-  if (!Number.isFinite(iterations) || iterations < 100000 || !salt || !expectedHash) return false;
+  if (!Number.isFinite(iterations) || iterations < 100000 || iterations > 100000 || !salt || !expectedHash) return false;
 
   const key = await crypto.subtle.importKey(
     'raw',
@@ -370,6 +379,13 @@ async function verifyPbkdf2(password, storedHash) {
     256
   );
   return timingSafeEqual(base64UrlEncodeBytes(new Uint8Array(bits)), expectedHash);
+}
+
+function isSupportedPbkdf2Hash(storedHash) {
+  const parts = String(storedHash || '').split('$');
+  if (parts.length !== 4 || parts[0] !== 'pbkdf2_sha256') return false;
+  const iterations = Number(parts[1]);
+  return Number.isFinite(iterations) && iterations === 100000;
 }
 
 function timingSafeEqual(a, b) {

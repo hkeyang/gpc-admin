@@ -34,7 +34,7 @@ npm run hash-secret -- "你的超级管理员密码"
 命令会输出类似：
 
 ```text
-pbkdf2_sha256$310000$...$...
+pbkdf2_sha256$100000$...$...
 ```
 
 把输出值配置到 Cloudflare 环境变量。
