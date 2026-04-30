@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   AlertTriangle,
@@ -30,6 +30,7 @@ import {
   Search,
   Send,
   Settings,
+  Save,
   ShieldCheck,
   ShoppingCart,
   Trash2,
@@ -53,7 +54,128 @@ import {
 } from 'recharts';
 import './styles.css';
 
-const exchangeRate = 6.84;
+const defaultExchangeRate = 6.84;
+const exchangeRateSource = 'Frankfurter';
+const defaultCostLabels = ['账号成本', 'VPS', 'ESIM', '写卡器', '其他成本'];
+const pushTemplateStorageKey = 'gpc_push_templates';
+const pushFieldOptions = [
+  { key: 'account', label: '账号', placeholder: '{account}' },
+  { key: 'password', label: '密码', placeholder: '{password}' },
+  { key: 'phone', label: '绑定手机号', placeholder: '{phone}' },
+  { key: 'email', label: '绑定邮箱', placeholder: '{email}' },
+  { key: 'securityCode', label: '设备安全码', placeholder: '{securityCode}' },
+  { key: 'vpsRemoteUrl', label: 'VPS登录链接', placeholder: '{vpsRemoteUrl}' },
+  { key: 'googleAuth', label: 'Google 验证', placeholder: '{googleAuth}' },
+  { key: 'vpsUsername', label: 'VPS 用户名', placeholder: '{vpsUsername}' },
+  { key: 'vpsPassword', label: 'VPS 密码', placeholder: '{vpsPassword}' },
+  { key: 'vpsIp', label: 'VPS IP', placeholder: '{vpsIp}' },
+  { key: 'remark', label: '备注', placeholder: '{remark}' }
+];
+const defaultPushTemplateFields = ['account', 'password', 'phone', 'email', 'securityCode', 'vpsRemoteUrl'];
+
+function createPushFormat(fields = defaultPushTemplateFields) {
+  return fields
+    .map((fieldKey) => {
+      const field = pushFieldOptions.find((item) => item.key === fieldKey);
+      return field ? `${field.label}：${field.placeholder}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+const defaultPushTemplates = [
+  {
+    id: 'list-default',
+    name: '列表页信息推送',
+    scene: 'products',
+    fields: defaultPushTemplateFields,
+    format: createPushFormat(defaultPushTemplateFields),
+    active: true
+  }
+];
+
+function localDateInput(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function localDateTimeInput(date = new Date()) {
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `${localDateInput(date)}T${hours}:${minutes}`;
+}
+
+function toDateTimeInputValue(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.replace(' ', 'T').slice(0, 16);
+}
+
+function fromDateTimeInputValue(value) {
+  return value ? value.replace('T', ' ') : '';
+}
+
+function openNativePicker(input) {
+  if (!input || input.disabled || input.readOnly) return;
+  input.focus({ preventScroll: true });
+  if (typeof input.showPicker === 'function') {
+    try {
+      input.showPicker();
+    } catch {
+      // Browsers may reject showPicker outside a direct user gesture.
+    }
+  }
+}
+
+function openRangePicker(event, fromInput, toInput) {
+  const clickedInput = event.target?.tagName === 'INPUT' ? event.target : null;
+  if (clickedInput) {
+    openNativePicker(clickedInput);
+    return;
+  }
+  const { left, width } = event.currentTarget.getBoundingClientRect();
+  openNativePicker(event.clientX < left + width / 2 ? fromInput : toInput);
+}
+
+function createBlankCosts() {
+  return defaultCostLabels.map((label, index) => ({
+    id: index + 1,
+    label,
+    amount: '',
+    remark: ''
+  }));
+}
+
+function createBlankProduct() {
+  return {
+    id: '',
+    createdAt: localDateInput(),
+    account: '',
+    email: '',
+    phoneCode: '+86',
+    phone: '',
+    password: '',
+    googleAuth: '',
+    securityCode: '',
+    vpsIp: '',
+    vpsRemoteUrl: '',
+    vpsUsername: '',
+    vpsPassword: '',
+    remark: '',
+    costs: createBlankCosts(),
+    salePrice: 0,
+    saleTime: '',
+    isSold: false,
+    isPaid: false,
+    settlementStatus: 'unsettled',
+    settlementExchangeRate: null,
+    settlementShareCnyHongKong: null,
+    settlementShareCnyWuhan: null,
+    updatedAt: ''
+  };
+}
 
 function getDeviceId() {
   const storageKey = 'gpc_device_id';
@@ -64,199 +186,7 @@ function getDeviceId() {
   return next;
 }
 
-const initialProducts = [
-  {
-    id: 1,
-    createdAt: '2024-04-27 10:28',
-    account: 'example@gmail.com',
-    email: 'example@gmail.com',
-    phoneCode: '+86',
-    phone: '138 0000 1234',
-    password: 'Gpc#2024!demo',
-    googleAuth: 'GBCD EFGH 1234 5678',
-    securityCode: '123456',
-    vpsIp: '30.199.***.***',
-    vpsRemoteUrl: 'ssh://root@30.199.xxx.xxx:22',
-    vpsUsername: 'vpsuser',
-    vpsPassword: 'Vps@2024#',
-    remark: '',
-    costs: [
-      { id: 1, label: '账号成本', amount: 210.45, remark: '' },
-      { id: 2, label: 'VPS', amount: 30.2, remark: '' },
-      { id: 3, label: 'ESIM', amount: 13.1, remark: '' },
-      { id: 4, label: '写卡器', amount: 2, remark: '' },
-      { id: 5, label: '其他成本', amount: 144.25, remark: '' }
-    ],
-    salePrice: 900,
-    saleTime: '2024-04-27 10:28',
-    isSold: true,
-    isPaid: false,
-    settlementStatus: 'unsettled',
-    updatedAt: '10:28:45'
-  },
-  {
-    id: 2,
-    createdAt: '2024-04-26 15:42',
-    account: 'demo_user',
-    email: 'demo***@outlook.com',
-    phoneCode: '+852',
-    phone: '6600 8811',
-    password: 'Demo@pass',
-    googleAuth: 'HJKL MNOP 8899 1023',
-    securityCode: '778899',
-    vpsIp: '47.244.***.***',
-    vpsRemoteUrl: 'rdp://47.244.xxx.xxx',
-    vpsUsername: 'administrator',
-    vpsPassword: 'VpS-demo-18',
-    remark: '已交付资料',
-    costs: [{ id: 1, label: '账号成本', amount: 220, remark: '' }],
-    salePrice: 500,
-    saleTime: '2024-04-26 16:00',
-    isSold: true,
-    isPaid: true,
-    settlementStatus: 'settled',
-    settledAt: '2024-04-27 18:30',
-    updatedAt: '10:22:31'
-  },
-  {
-    id: 3,
-    createdAt: '2024-04-26 11:05',
-    account: 'test123',
-    email: 'test123@gmail.com',
-    phoneCode: '+86',
-    phone: '139 2345 6789',
-    password: 'Test#123',
-    googleAuth: 'QWER TYUI 1122 3344',
-    securityCode: '453211',
-    vpsIp: '15.236.***.***',
-    vpsRemoteUrl: 'ssh://root@15.236.xxx.xxx:22',
-    vpsUsername: 'root',
-    vpsPassword: 'root-test',
-    remark: '',
-    costs: [{ id: 1, label: 'VPS', amount: 205.3, remark: '' }],
-    salePrice: 450,
-    saleTime: '2024-04-26 11:12',
-    isSold: true,
-    isPaid: true,
-    settlementStatus: 'unsettled',
-    updatedAt: '10:18:09'
-  },
-  {
-    id: 4,
-    createdAt: '2024-04-25 16:30',
-    account: 'alpha_user',
-    email: 'alpha***@gmail.com',
-    phoneCode: '+86',
-    phone: '137 3000 8888',
-    password: 'Alpha#8899',
-    googleAuth: 'ALPH AUSR 4455 6677',
-    securityCode: '900821',
-    vpsIp: '8.210.***.***',
-    vpsRemoteUrl: 'ssh://root@8.210.xxx.xxx:22',
-    vpsUsername: 'root',
-    vpsPassword: 'alpha-vps',
-    remark: '',
-    costs: [{ id: 1, label: '账号成本', amount: 198.75, remark: '' }],
-    salePrice: 400,
-    saleTime: '2024-04-25 17:21',
-    isSold: true,
-    isPaid: false,
-    settlementStatus: 'unsettled',
-    updatedAt: '10:12:55'
-  },
-  {
-    id: 5,
-    createdAt: '2024-04-25 09:18',
-    account: 'user456',
-    email: 'user456@outlook.com',
-    phoneCode: '+86',
-    phone: '136 4567 0000',
-    password: 'User456!',
-    googleAuth: 'ZXCV BNML 2345 9988',
-    securityCode: '120920',
-    vpsIp: '43.198.***.***',
-    vpsRemoteUrl: 'rdp://43.198.xxx.xxx',
-    vpsUsername: 'admin',
-    vpsPassword: 'pass456',
-    remark: '',
-    costs: [{ id: 1, label: '其他成本', amount: 215.6, remark: '' }],
-    salePrice: 450,
-    saleTime: '',
-    isSold: false,
-    isPaid: false,
-    settlementStatus: 'unsettled',
-    updatedAt: '09:58:17'
-  },
-  {
-    id: 6,
-    createdAt: '2024-04-24 22:11',
-    account: 'beta_test',
-    email: 'beta***@hotmail.com',
-    phoneCode: '+86',
-    phone: '135 1111 2222',
-    password: 'Beta@2024',
-    googleAuth: 'BETA TEST 3333 4444',
-    securityCode: '560011',
-    vpsIp: '119.29.***.***',
-    vpsRemoteUrl: 'ssh://root@119.29.xxx.xxx:22',
-    vpsUsername: 'root',
-    vpsPassword: 'beta-vps',
-    remark: '',
-    costs: [{ id: 1, label: '账号成本', amount: 230, remark: '' }],
-    salePrice: 500,
-    saleTime: '2024-04-24 22:30',
-    isSold: true,
-    isPaid: true,
-    settlementStatus: 'settled',
-    updatedAt: '10:05:34'
-  },
-  {
-    id: 7,
-    createdAt: '2024-04-24 14:07',
-    account: 'gamma001',
-    email: 'gamma001@gmail.com',
-    phoneCode: '+86',
-    phone: '134 9000 2211',
-    password: 'Gamma001',
-    googleAuth: 'GAMA AUTH 1122 8899',
-    securityCode: '109234',
-    vpsIp: '103.45.***.***',
-    vpsRemoteUrl: 'ssh://root@103.45.xxx.xxx:22',
-    vpsUsername: 'root',
-    vpsPassword: 'gamma-vps',
-    remark: '',
-    costs: [{ id: 1, label: 'VPS', amount: 208.9, remark: '' }],
-    salePrice: 450,
-    saleTime: '2024-04-24 15:00',
-    isSold: true,
-    isPaid: true,
-    settlementStatus: 'unsettled',
-    updatedAt: '09:48:12'
-  },
-  {
-    id: 8,
-    createdAt: '2024-04-24 10:55',
-    account: 'new_account',
-    email: 'new***@qq.com',
-    phoneCode: '+86',
-    phone: '133 2000 9000',
-    password: 'NewAccount',
-    googleAuth: 'NEWQ QQQQ 1234 0000',
-    securityCode: '880012',
-    vpsIp: '124.71.***.***',
-    vpsRemoteUrl: '',
-    vpsUsername: '',
-    vpsPassword: '',
-    remark: '',
-    costs: [],
-    salePrice: 400,
-    saleTime: '',
-    isSold: false,
-    isPaid: false,
-    settlementStatus: 'unsettled',
-    updatedAt: '09:35:11'
-  }
-];
+const initialProducts = [];
 
 const businessTrend = [
   { date: '04-21', sales: 7600, profit: 2340 },
@@ -319,8 +249,81 @@ function formatExchangeValue(value) {
   return Number(number.toFixed(2)).toString();
 }
 
+function normalizeExchangeRate(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : defaultExchangeRate;
+}
+
+function settlementCnySnapshot(share, rate) {
+  const normalizedRate = normalizeExchangeRate(rate);
+  const shareCny = Number((Number(share || 0) * normalizedRate).toFixed(2));
+  return {
+    settlementExchangeRate: normalizedRate,
+    settlementShareCnyHongKong: shareCny,
+    settlementShareCnyWuhan: shareCny
+  };
+}
+
+function productSettlementSnapshot(product, share) {
+  if (product.settlementStatus !== 'settled') return null;
+  const rate = Number(product.settlementExchangeRate);
+  const hongKong = Number(product.settlementShareCnyHongKong);
+  const wuhan = Number(product.settlementShareCnyWuhan);
+  if (Number.isFinite(rate) && rate > 0 && Number.isFinite(hongKong) && Number.isFinite(wuhan)) {
+    return { rate, hongKong, wuhan };
+  }
+  const fallback = settlementCnySnapshot(share, defaultExchangeRate);
+  return {
+    rate: fallback.settlementExchangeRate,
+    hongKong: fallback.settlementShareCnyHongKong,
+    wuhan: fallback.settlementShareCnyWuhan
+  };
+}
+
 function trendDateValue(date) {
   return `2024-${date}`;
+}
+
+function dateKey(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function shortDate(dateText) {
+  return String(dateText || '').slice(5, 10);
+}
+
+function buildDailyTrend(products, days = 7) {
+  const today = new Date();
+  const rows = Array.from({ length: days }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (days - index - 1));
+    return { date: shortDate(dateKey(date)), fullDate: dateKey(date), sales: 0, profit: 0 };
+  });
+
+  const byDate = new Map(rows.map((item) => [item.fullDate, item]));
+  products.forEach((product) => {
+    if (!product.isSold) return;
+    const key = String(product.saleTime || product.createdAt || '').slice(0, 10);
+    const row = byDate.get(key);
+    if (!row) return;
+    row.sales += Number(product.salePrice || 0);
+    row.profit += productProfit(product);
+  });
+  return rows;
+}
+
+function buildMonthlyBars(products) {
+  const byMonth = new Map();
+  products.forEach((product) => {
+    const key = String(product.saleTime || product.createdAt || '').slice(0, 7);
+    if (!key) return;
+    const label = `${Number(key.slice(5, 7))}月`;
+    const current = byMonth.get(key) || { month: label, cost: 0, profit: 0 };
+    current.cost += sumCosts(product);
+    if (product.isSold) current.profit += productProfit(product);
+    byMonth.set(key, current);
+  });
+  return [...byMonth.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, row]) => row).slice(-6);
 }
 
 function sumCosts(product) {
@@ -361,15 +364,90 @@ function statusClass(status) {
   return 'warning';
 }
 
+async function apiJson(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.message || '请求失败');
+  return data;
+}
+
+function normalizePushTemplates(value) {
+  const templates = Array.isArray(value) && value.length ? value : defaultPushTemplates;
+  return templates.map((template, index) => {
+    const fields = Array.isArray(template.fields) && template.fields.length ? template.fields : defaultPushTemplateFields;
+    return {
+      id: template.id || `push-${Date.now()}-${index}`,
+      name: template.name || '列表页信息推送',
+      scene: template.scene || 'products',
+      fields,
+      format: template.format || createPushFormat(fields),
+      active: Boolean(template.active)
+    };
+  });
+}
+
+function readStoredPushTemplates() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(pushTemplateStorageKey) || '[]');
+    return normalizePushTemplates(stored);
+  } catch {
+    return defaultPushTemplates;
+  }
+}
+
+function productPushValue(product, key) {
+  if (key === 'phone') return formatPhoneNumber(product.phoneCode, product.phone);
+  return product[key] ?? '';
+}
+
+function formatPhoneNumber(phoneCode, phone) {
+  const code = String(phoneCode || '').trim();
+  const rawPhone = String(phone || '').trim();
+  if (!code) return rawPhone;
+  if (!rawPhone) return code;
+
+  const normalizedCode = code.replace(/^\+/, '');
+  const normalizedPhone = rawPhone.replace(/^[+\s-]+/, '');
+  if (normalizedPhone === normalizedCode) return code;
+  if (normalizedPhone.startsWith(normalizedCode)) return `${code} ${normalizedPhone.slice(normalizedCode.length).trim()}`;
+  return `${code} ${rawPhone}`;
+}
+
+function buildProductPushMessage(product, template = defaultPushTemplates[0]) {
+  const fields = Array.isArray(template.fields) && template.fields.length ? template.fields : defaultPushTemplateFields;
+  const format = template.format || createPushFormat(fields);
+  return pushFieldOptions.reduce((message, field) => {
+    return message.replaceAll(field.placeholder, cleanMessageValue(productPushValue(product, field.key)));
+  }, format);
+}
+
+function cleanMessageValue(value) {
+  return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
 function App() {
   const [page, setPageState] = useState(() => window.location.hash.replace('#/', '') || 'dashboard');
   const [products, setProducts] = useState(initialProducts);
-  const [activeId, setActiveId] = useState(1);
+  const [activeId, setActiveId] = useState(initialProducts[0]?.id || 1);
+  const [draftProduct, setDraftProduct] = useState(null);
+  const [productSync, setProductSync] = useState({ loading: false, saving: false, message: '' });
+  const [pushTemplates, setPushTemplates] = useState(readStoredPushTemplates);
   const [deviceId] = useState(getDeviceId);
   const [authState, setAuthState] = useState({ loading: true, authenticated: false, user: null, pendingRequestId: '' });
-  const activeProduct = products.find((item) => item.id === activeId) || products[0];
+  const activeProduct = draftProduct && draftProduct.id === activeId
+    ? draftProduct
+    : products.find((item) => item.id === activeId) || products[0] || null;
   const currentUser = authState.user;
   const isSuperAdmin = currentUser?.role === 'super_admin';
+  const listPushTemplate = useMemo(() => {
+    return pushTemplates.find((item) => item.scene === 'products' && item.active)
+      || pushTemplates.find((item) => item.scene === 'products')
+      || defaultPushTemplates[0];
+  }, [pushTemplates]);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -391,6 +469,10 @@ function App() {
       .catch(() => setAuthState({ loading: false, authenticated: false, user: null, pendingRequestId: '' }));
   }, []);
 
+  useEffect(() => {
+    window.localStorage.setItem(pushTemplateStorageKey, JSON.stringify(pushTemplates));
+  }, [pushTemplates]);
+
   const setPage = (nextPage) => {
     if (nextPage === 'settings' && !isSuperAdmin) {
       nextPage = 'dashboard';
@@ -405,12 +487,33 @@ function App() {
     }
   }, [authState.authenticated, page, isSuperAdmin]);
 
+  useEffect(() => {
+    if (!authState.authenticated) return;
+    let cancelled = false;
+    setProductSync((current) => ({ ...current, loading: true, message: '' }));
+    apiJson('/api/products')
+      .then((data) => {
+        if (cancelled) return;
+        const loadedProducts = Array.isArray(data.products) ? data.products : [];
+        setProducts(loadedProducts);
+        setActiveId((currentId) => loadedProducts.some((item) => item.id === currentId) ? currentId : loadedProducts[0]?.id || currentId);
+        setProductSync({ loading: false, saving: false, message: '' });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setProductSync({ loading: false, saving: false, message: error.message || '产品数据读取失败，当前显示本地示例数据。' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.authenticated]);
+
   const addProduct = () => {
     const now = new Date();
     const nextId = Math.max(...products.map((item) => item.id), 0) + 1;
     const nextProduct = {
       id: nextId,
-      createdAt: now.toISOString().slice(0, 16).replace('T', ' '),
+      createdAt: localDateInput(now),
       account: `new_product_${nextId}`,
       email: '',
       phoneCode: '+86',
@@ -423,31 +526,65 @@ function App() {
       vpsUsername: '',
       vpsPassword: '',
       remark: '',
-      costs: [],
+      costs: createBlankCosts(),
       salePrice: 0,
       saleTime: '',
       isSold: false,
       isPaid: false,
       settlementStatus: 'unsettled',
+      settlementExchangeRate: null,
+      settlementShareCnyHongKong: null,
+      settlementShareCnyWuhan: null,
       updatedAt: now.toLocaleTimeString('zh-CN', { hour12: false })
     };
-    setProducts((current) => [nextProduct, ...current]);
-    setActiveId(nextId);
+    nextProduct.id = `draft-${Date.now()}`;
+    setDraftProduct(nextProduct);
+    setActiveId(nextProduct.id);
     setPage('workbench');
   };
 
-  const updateProduct = (id, patch) => {
-    setProducts((current) =>
-      current.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              ...patch,
-              updatedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false })
-            }
-          : item
-      )
-    );
+  const saveProduct = async (product) => {
+    setProductSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const isDraft = String(product.id).startsWith('draft-');
+      const payload = { ...product };
+      if (isDraft) delete payload.id;
+      const data = await apiJson(isDraft ? '/api/products' : `/api/products/${encodeURIComponent(product.id)}`, {
+        method: isDraft ? 'POST' : 'PUT',
+        body: JSON.stringify(payload)
+      });
+      const savedProduct = data.product;
+      setProducts((current) => {
+        const withoutDraft = current.filter((item) => item.id !== product.id);
+        const exists = withoutDraft.some((item) => item.id === savedProduct.id);
+        return exists
+          ? withoutDraft.map((item) => item.id === savedProduct.id ? savedProduct : item)
+          : [savedProduct, ...withoutDraft];
+      });
+      setDraftProduct(null);
+      setActiveId(savedProduct.id);
+      setProductSync({ loading: false, saving: false, message: '产品已保存。' });
+      return { ok: true, product: savedProduct };
+    } catch (error) {
+      const message = error.message || '保存失败，请稍后重试。';
+      setProductSync({ loading: false, saving: false, message });
+      return { ok: false, message };
+    }
+  };
+
+  const clearProducts = async () => {
+    const confirmed = window.confirm('确定清空全部产品数据吗？此操作会删除当前所有产品记录。');
+    if (!confirmed) return;
+    setProductSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const data = await apiJson('/api/products', { method: 'DELETE' });
+      setProducts([]);
+      setDraftProduct(null);
+      setActiveId(null);
+      setProductSync({ loading: false, saving: false, message: `已清空产品数据，共删除 ${data.deleted || 0} 条。` });
+    } catch (error) {
+      setProductSync({ loading: false, saving: false, message: error.message || '清空产品数据失败，请稍后重试。' });
+    }
   };
 
   const handleLogin = async (username, password) => {
@@ -513,6 +650,7 @@ function App() {
         {page === 'products' && (
           <ProductsPage
             products={products}
+            pushTemplate={listPushTemplate}
             onAddProduct={addProduct}
             onOpenWorkbench={(id) => {
               setActiveId(id);
@@ -520,8 +658,16 @@ function App() {
             }}
           />
         )}
-        {page === 'workbench' && (
-          <Workbench product={activeProduct} user={currentUser} onChange={(patch) => updateProduct(activeProduct.id, patch)} />
+        {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
+        {page === 'workbench' && activeProduct && (
+          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} saving={productSync.saving} />
+        )}
+        {page === 'push-settings' && (
+          <PushSettingsPage
+            products={products}
+            templates={pushTemplates}
+            onChange={setPushTemplates}
+          />
         )}
         {page === 'settings' && isSuperAdmin && <SettingsPage user={currentUser} />}
       </main>
@@ -615,7 +761,7 @@ function Sidebar({ current, onChange, user }) {
   const nav = [
     { id: 'dashboard', label: '首页', icon: Home },
     { id: 'products', label: '产品列表', icon: ClipboardList },
-    { id: 'workbench', label: '产品工作台', icon: WalletCards },
+    { id: 'push-settings', label: '推送设置', icon: Send },
     { id: 'settings', label: '系统设置', icon: Settings }
   ].filter((item) => item.id !== 'settings' || isSuperAdmin);
 
@@ -662,31 +808,37 @@ function Topbar({ user, onLogout }) {
 
 function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
   const [trendRange, setTrendRange] = useState('7d');
-  const [customTrendRange, setCustomTrendRange] = useState({ from: '2024-04-23', to: '2024-04-26' });
+  const [customTrendRange, setCustomTrendRange] = useState({ from: '', to: '' });
   const total = products.length;
   const sold = products.filter((item) => item.isSold).length;
+  const paid = products.filter((item) => item.isPaid).length;
+  const totalSales = products.filter((item) => item.isSold).reduce((sum, item) => sum + Number(item.salePrice || 0), 0);
   const totalProfit = products.filter((item) => item.isSold).reduce((sum, item) => sum + productProfit(item), 0);
   const pendingPayment = products.filter((item) => item.isSold && !item.isPaid).reduce((sum, item) => sum + Number(item.salePrice || 0), 0);
+  const missingCost = products.filter((item) => !item.costs.length || sumCosts(item) === 0).length;
   const pendingSettlement = products
     .filter((item) => item.isPaid && item.settlementStatus === 'unsettled')
     .reduce((sum, item) => sum + productProfit(item), 0);
 
   const pie = [
-    { name: '待售', value: products.filter((item) => !item.isSold).length || 1, color: '#3f74f6' },
+    { name: '待售', value: products.filter((item) => !item.isSold).length, color: '#3f74f6' },
     { name: '已售', value: products.filter((item) => item.isSold).length, color: '#26c281' },
-    { name: '已下架', value: 1, color: '#8290a8' }
+    { name: '待补成本', value: missingCost, color: '#8290a8' }
   ];
+  const visiblePie = pie.some((item) => item.value > 0)
+    ? pie
+    : [{ name: '暂无数据', value: 1, color: '#e4e8f1' }];
   const activeTrend = useMemo(() => {
-    if (trendRange === '30d') return businessTrend30;
-    if (trendRange !== 'custom') return businessTrend;
-    const filtered = businessTrend30.filter((item) => (
-      (!customTrendRange.from || trendDateValue(item.date) >= customTrendRange.from) &&
-      (!customTrendRange.to || trendDateValue(item.date) <= customTrendRange.to)
+    const base = buildDailyTrend(products, trendRange === '30d' || trendRange === 'custom' ? 30 : 7);
+    if (trendRange !== 'custom') return base;
+    return base.filter((item) => (
+      (!customTrendRange.from || item.fullDate >= customTrendRange.from) &&
+      (!customTrendRange.to || item.fullDate <= customTrendRange.to)
     ));
-    return filtered.length ? filtered : businessTrend30;
-  }, [trendRange, customTrendRange]);
+  }, [products, trendRange, customTrendRange]);
+  const monthlyBars = useMemo(() => buildMonthlyBars(products), [products]);
   const trendLabel = trendRange === '30d' ? '近 30 天' : trendRange === 'custom' ? '自定义区间' : '近 7 天';
-  const trendPeak = Math.max(...activeTrend.map((item) => item.profit));
+  const trendPeak = activeTrend.length ? Math.max(...activeTrend.map((item) => item.profit)) : 0;
   const trendPeakDate = activeTrend.find((item) => item.profit === trendPeak)?.date;
   const downloadTrend = () => downloadCsv('gpc-business-trend.csv', [
     ['日期', '销售额', '利润'],
@@ -697,12 +849,12 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
     <section className="page">
       <div className="page-title"><h1>首页</h1><span>业务驾驶舱</span></div>
       <div className="kpi-grid six">
-        <Kpi icon={WalletCards} label="累计产品" value="248 件" sub="较上月 +18　7.83%" tone="purple" />
-        <Kpi icon={ShoppingCart} label="累计售出" value="12,865 件" sub="较上月 +1,236　10.61%" tone="blue" />
-        <Kpi icon={Coins} label="累计利润" value="$183,960" sub="较上月 +14,440　8.52%" tone="orange" />
-        <Kpi icon={TrendingUp} label="本月利润" value="$14,406" sub="较上月 +1,870　14.91%" tone="green" />
-        <Kpi icon={Database} label="待回款" value={money(pendingPayment)} sub="较上月 -1,260　3.82%" tone="orange" negative />
-        <Kpi icon={CreditCard} label="待结算" value={money(pendingSettlement)} sub="较上月 +3,092　6.58%" tone="purple" />
+        <Kpi icon={WalletCards} label="累计产品" value={`${total} 件`} sub="实时产品库" tone="purple" />
+        <Kpi icon={ShoppingCart} label="累计售出" value={`${sold} 件`} sub={`回款 ${paid} 件`} tone="blue" />
+        <Kpi icon={Coins} label="累计利润" value={money(totalProfit)} sub={`销售额 ${money(totalSales)}`} tone="orange" />
+        <Kpi icon={TrendingUp} label="本月利润" value={money(monthlyBars.at(-1)?.profit || 0)} sub="当前产品数据" tone="green" />
+        <Kpi icon={Database} label="待回款" value={money(pendingPayment)} sub={`${products.filter((item) => item.isSold && !item.isPaid).length} 笔`} tone="orange" negative />
+        <Kpi icon={CreditCard} label="待结算" value={money(pendingSettlement)} sub={`${products.filter((item) => item.isPaid && item.settlementStatus === 'unsettled').length} 笔`} tone="purple" />
       </div>
 
       <div className="dashboard-grid">
@@ -726,22 +878,22 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
               <Area isAnimationActive={false} type="monotone" dataKey="profit" name="利润" stroke="#4f9ff8" strokeWidth={2.5} fill="transparent" />
             </AreaChart>
           </ResponsiveContainer>
-          <ChartInsight tone="blue">{trendLabel}利润峰值 {money(trendPeak)}，出现在 {trendPeakDate}。</ChartInsight>
+          <ChartInsight tone="blue">{trendLabel}利润峰值 {money(trendPeak)}{trendPeakDate ? `，出现在 ${trendPeakDate}。` : '。'}</ChartInsight>
         </Panel>
 
         <Panel title="产品状态分布" className="status-panel">
           <div className="donut-wrap">
             <div className="donut-chart-box">
               <PieChart width={190} height={190}>
-                <Pie isAnimationActive={false} data={pie} innerRadius={58} outerRadius={78} dataKey="value" strokeWidth={0}>
-                  {pie.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
+                <Pie isAnimationActive={false} data={visiblePie} innerRadius={58} outerRadius={78} dataKey="value" strokeWidth={0}>
+                  {visiblePie.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
                 </Pie>
               </PieChart>
-              <div className="donut-center"><span>总数</span><strong>248</strong></div>
+              <div className="donut-center"><span>总数</span><strong>{total}</strong></div>
             </div>
             <div className="legend">
               {pie.map((entry, index) => (
-                <div key={entry.name}><i style={{ background: entry.color }} />{entry.name}<b>{index === 0 ? 156 : index === 1 ? 78 : 14}</b></div>
+                <div key={entry.name}><i style={{ background: entry.color }} />{entry.name}<b>{entry.value}</b></div>
               ))}
             </div>
           </div>
@@ -749,9 +901,9 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
 
         <Panel title="关键提醒" action={<button className="link-button" onClick={onOpenProducts}>查看全部 <ChevronRight size={14} /></button>}>
           <div className="alerts">
-            <AlertRow icon={AlertTriangle} label="未回款" value={money(pendingPayment)} sub="共 5 笔　较上月 ↓3 笔" tone="red" />
-            <AlertRow icon={ShieldCheck} label="未结算" value={money(pendingSettlement)} sub="共 7 笔　较上月 ↓2 笔" tone="orange" />
-            <AlertRow icon={UserRound} label="待补成本" value="$4,180" sub="共 3 个产品　较上月 ↓1 个" tone="purple" />
+            <AlertRow icon={AlertTriangle} label="未回款" value={money(pendingPayment)} sub={`共 ${products.filter((item) => item.isSold && !item.isPaid).length} 笔`} tone="red" />
+            <AlertRow icon={ShieldCheck} label="未结算" value={money(pendingSettlement)} sub={`共 ${products.filter((item) => item.isPaid && item.settlementStatus === 'unsettled').length} 笔`} tone="orange" />
+            <AlertRow icon={UserRound} label="待补成本" value={`${missingCost} 个`} sub="成本为 0 或未填写" tone="purple" />
           </div>
         </Panel>
       </div>
@@ -763,7 +915,7 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
             { label: '利润', color: '#8f63f7' }
           ]} />
           <ResponsiveContainer width="100%" height={218}>
-            <BarChart data={monthBars} margin={{ left: 6, right: 10, top: 12, bottom: 0 }}>
+            <BarChart data={monthlyBars} margin={{ left: 6, right: 10, top: 12, bottom: 0 }}>
               <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#9aa4b6', fontSize: 11 }} />
               <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9aa4b6', fontSize: 11 }} />
               <Tooltip content={<BarTooltip />} />
@@ -771,7 +923,7 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
               <Bar isAnimationActive={false} dataKey="profit" name="利润" fill="#8f63f7" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-          <ChartInsight tone="purple">4 月利润 $14,406，高于成本 $10,738；利润率约 57.3%。</ChartInsight>
+          <ChartInsight tone="purple">月度图表随产品成本、售价和销售状态实时更新。</ChartInsight>
         </Panel>
         <Panel title="最近产品记录" action={<button className="link-button" onClick={onOpenProducts}>查看全部 <ChevronRight size={14} /></button>}>
           <table className="mini-table">
@@ -786,6 +938,7 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
                   <td>{item.updatedAt}</td>
                 </tr>
               ))}
+              {!products.length && <tr><td colSpan={5}>暂无产品记录</td></tr>}
             </tbody>
           </table>
         </Panel>
@@ -809,6 +962,8 @@ function Kpi({ icon: Icon, label, value, sub, tone, negative }) {
 }
 
 function ChartTabs({ active, customRange, onChange, onCustomRangeChange, onDownload }) {
+  const fromInputRef = useRef(null);
+  const toInputRef = useRef(null);
   const updateCustomRange = (key, value) => {
     onCustomRangeChange((current) => ({ ...current, [key]: value }));
     onChange('custom');
@@ -820,10 +975,10 @@ function ChartTabs({ active, customRange, onChange, onCustomRangeChange, onDownl
       <button className={active === '30d' ? 'active' : ''} onClick={() => onChange('30d')}>近30天</button>
       <button className={active === 'custom' ? 'active' : ''} onClick={() => onChange('custom')}>自定义</button>
       {active === 'custom' && (
-        <div className="custom-date-range">
-          <input aria-label="自定义开始日期" type="date" value={customRange.from} onChange={(event) => updateCustomRange('from', event.target.value)} />
+        <div className="custom-date-range" onClick={(event) => openRangePicker(event, fromInputRef.current, toInputRef.current)}>
+          <input ref={fromInputRef} aria-label="自定义开始日期" type="date" value={customRange.from} onChange={(event) => updateCustomRange('from', event.target.value)} />
           <span>-</span>
-          <input aria-label="自定义结束日期" type="date" value={customRange.to} onChange={(event) => updateCustomRange('to', event.target.value)} />
+          <input ref={toInputRef} aria-label="自定义结束日期" type="date" value={customRange.to} onChange={(event) => updateCustomRange('to', event.target.value)} />
         </div>
       )}
       <button className="icon-button" aria-label="下载经营数据" onClick={onDownload}><Download size={15} /></button>
@@ -882,7 +1037,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ products, onOpenWorkbench, onAddProduct }) {
+function ProductsPage({ products, pushTemplate, onOpenWorkbench, onAddProduct }) {
   const [keyword, setKeyword] = useState('');
   const [saleFilter, setSaleFilter] = useState('全部');
   const [paidFilter, setPaidFilter] = useState('全部');
@@ -891,6 +1046,7 @@ function ProductsPage({ products, onOpenWorkbench, onAddProduct }) {
   const [dateTo, setDateTo] = useState('');
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
+  const [pushState, setPushState] = useState({ productId: '', message: '' });
 
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
@@ -907,6 +1063,14 @@ function ProductsPage({ products, onOpenWorkbench, onAddProduct }) {
   }, [products, keyword, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo]);
   const pageCount = Math.max(1, Math.ceil(filteredProducts.length / pageSize));
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const today = localDateInput();
+  const soldProducts = products.filter((item) => item.isSold);
+  const paidProducts = products.filter((item) => item.isPaid);
+  const unsettledProducts = products.filter((item) => item.settlementStatus === 'unsettled');
+  const todayProducts = products.filter((item) => productDateValue(item) === today);
+  const todaySold = products.filter((item) => item.isSold && String(item.saleTime || item.createdAt || '').slice(0, 10) === today);
+  const todayPaid = todaySold.filter((item) => item.isPaid);
+  const unsettledProfit = unsettledProducts.reduce((sum, item) => sum + Math.max(productProfit(item), 0), 0);
   useEffect(() => {
     setCurrentPage(1);
   }, [keyword, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo, pageSize]);
@@ -918,15 +1082,27 @@ function ProductsPage({ products, onOpenWorkbench, onAddProduct }) {
     setDateFrom('');
     setDateTo('');
   };
+  const pushProduct = async (product) => {
+    setPushState({ productId: product.id, message: `正在推送 ${product.account || `#${product.id}`} 到 Telegram...` });
+    try {
+      await apiJson('/api/telegram/push', {
+        method: 'POST',
+        body: JSON.stringify({ message: buildProductPushMessage(product, pushTemplate) })
+      });
+      setPushState({ productId: '', message: `已推送 ${product.account || `#${product.id}`} 到 Telegram Bot。` });
+    } catch (error) {
+      setPushState({ productId: '', message: error.message || 'Telegram 推送失败，请稍后重试。' });
+    }
+  };
 
   return (
     <section className="page products-page">
       <div className="kpi-grid five compact">
-        <Kpi icon={Box} label="产品总数" value="128" tone="purple" />
-        <Kpi icon={ShoppingCart} label="待售" value="34" tone="blue" />
-        <Kpi icon={CheckCircle2} label="已售" value="62" tone="green" />
-        <Kpi icon={CreditCard} label="已回款" value="55" tone="purple" />
-        <Kpi icon={Info} label="未结算" value="21" tone="orange" />
+        <Kpi icon={Box} label="产品总数" value={String(products.length)} tone="purple" />
+        <Kpi icon={ShoppingCart} label="待售" value={String(products.length - soldProducts.length)} tone="blue" />
+        <Kpi icon={CheckCircle2} label="已售" value={String(soldProducts.length)} tone="green" />
+        <Kpi icon={CreditCard} label="已回款" value={String(paidProducts.length)} tone="purple" />
+        <Kpi icon={Info} label="未结算" value={String(unsettledProducts.length)} tone="orange" />
       </div>
       <div className="list-layout">
         <Panel className="list-panel">
@@ -936,16 +1112,19 @@ function ProductsPage({ products, onOpenWorkbench, onAddProduct }) {
             <FilterSelect label="回款状态" value={paidFilter} onChange={setPaidFilter} options={['全部', '未回款', '已回款']} />
             <FilterSelect label="结算状态" value={settlementFilter} onChange={setSettlementFilter} options={['全部', '未结算', '已结算']} />
             <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
-            <button className="secondary-button" onClick={resetFilters}>重置</button>
-            <button className="primary-button" onClick={onAddProduct}><Plus size={16} /> 新增产品</button>
+            <div className="filters-actions">
+              <button className="secondary-button" onClick={resetFilters}>重置</button>
+              <button className="primary-button" onClick={onAddProduct}><Plus size={16} /> 新增产品</button>
+            </div>
           </div>
+          {pushState.message && <div className="inline-notice product-list-notice"><Info size={15} />{pushState.message}</div>}
           {products.length === 0 ? (
             <EmptyState icon={Box} title="暂无产品" text="先新增产品，再录入账号资料、成本、销售与结算信息。" />
           ) : filteredProducts.length === 0 ? (
             <EmptyState icon={Search} title="没有匹配结果" text="换一个关键词，或清空销售、回款、结算筛选条件。" />
           ) : (
             <>
-              <ProductTable products={paginatedProducts} onOpenWorkbench={onOpenWorkbench} />
+              <ProductTable products={paginatedProducts} onOpenWorkbench={onOpenWorkbench} onPushProduct={pushProduct} pushingId={pushState.productId} />
               <div className="pagination">
                 <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
                   <option value={5}>5 条/页</option>
@@ -965,10 +1144,10 @@ function ProductsPage({ products, onOpenWorkbench, onAddProduct }) {
           )}
         </Panel>
         <aside className="right-board">
-          <MiniMetric icon={Box} label="今日新增" value="3" />
-          <MiniMetric icon={ShoppingCart} label="今日已售" value="5" />
-          <MiniMetric icon={CreditCard} label="今日回款" value="4" />
-          <MiniMetric icon={DollarSign} label="待结算利润" value="$2,450.00" accent />
+          <MiniMetric icon={Box} label="今日新增" value={String(todayProducts.length)} />
+          <MiniMetric icon={ShoppingCart} label="今日已售" value={String(todaySold.length)} />
+          <MiniMetric icon={CreditCard} label="今日回款" value={String(todayPaid.length)} />
+          <MiniMetric icon={DollarSign} label="待结算利润" value={money(unsettledProfit)} accent />
           <div className="hint-card"><Info size={18} />提示：点击 “工作台” 可进入单个产品的详细录入与结算页面</div>
         </aside>
       </div>
@@ -988,25 +1167,26 @@ function FilterSelect({ label, value, onChange, options }) {
 }
 
 function DateRangeFilter({ from, to, onFromChange, onToChange }) {
+  const fromInputRef = useRef(null);
+  const toInputRef = useRef(null);
   return (
     <div className="date-filter">
-      <span>创建时间</span>
-      <div className="date-range">
-        <input aria-label="开始日期" type="date" value={from} max={to || undefined} onChange={(event) => onFromChange(event.target.value)} />
+      <span>上架时间</span>
+      <div className="date-range" onClick={(event) => openRangePicker(event, fromInputRef.current, toInputRef.current)}>
+        <input ref={fromInputRef} aria-label="开始日期" type="date" value={from} max={to || undefined} onChange={(event) => onFromChange(event.target.value)} />
         <b>~</b>
-        <input aria-label="结束日期" type="date" value={to} min={from || undefined} onChange={(event) => onToChange(event.target.value)} />
-        <Calendar size={15} />
+        <input ref={toInputRef} aria-label="结束日期" type="date" value={to} min={from || undefined} onChange={(event) => onToChange(event.target.value)} />
       </div>
     </div>
   );
 }
 
-function ProductTable({ products, onOpenWorkbench }) {
+function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
   return (
     <table className="product-table">
       <thead>
         <tr>
-          <th>ID</th><th>创建时间</th><th>账号</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
+          <th>ID</th><th>上架时间</th><th>账号</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -1016,20 +1196,45 @@ function ProductTable({ products, onOpenWorkbench }) {
           return (
             <tr key={item.id}>
               <td>{item.id}</td>
-              <td>{item.createdAt}</td>
-              <td>{item.account}</td>
+              <td>{productDateValue(item)}</td>
+              <td><CopyableAccountCell value={item.account || item.email} /></td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
               <td><StatusBadge label={item.isSold ? '已售' : '待售'} /></td>
               <td>{item.isSold ? <StatusBadge label={item.isPaid ? '已回款' : '未回款'} /> : '-'}</td>
               <td><StatusBadge label={item.settlementStatus === 'settled' ? '已结算' : '未结算'} /></td>
-              <td className="actions"><button onClick={() => onOpenWorkbench(item.id)}>查看</button><button onClick={() => onOpenWorkbench(item.id)}>编辑</button><button onClick={() => onOpenWorkbench(item.id)}>工作台</button></td>
+              <td className="actions">
+                <button onClick={() => onOpenWorkbench(item.id)}>工作台</button>
+                <button disabled={pushingId === item.id} onClick={() => onPushProduct(item)}>{pushingId === item.id ? '推送中' : '推送'}</button>
+              </td>
             </tr>
           );
         })}
       </tbody>
     </table>
+  );
+}
+
+function CopyableAccountCell({ value }) {
+  const [copied, setCopied] = useState(false);
+  const text = String(value || '');
+  const copyAccount = async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard?.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <span className="copyable-account" title="双击复制邮箱" onDoubleClick={copyAccount}>
+      <span>{text}</span>
+      {copied && <em>已复制</em>}
+    </span>
   );
 }
 
@@ -1043,23 +1248,39 @@ function EmptyState({ icon: Icon, title, text }) {
   );
 }
 
-function Workbench({ product, user, onChange }) {
+function Workbench({ product, user, onSave, saving }) {
+  const [draft, setDraft] = useState(product);
+  const [dirty, setDirty] = useState(false);
   const [visible, setVisible] = useState({});
   const [costDraft, setCostDraft] = useState({ label: '', amount: '', remark: '' });
   const [showCostForm, setShowCostForm] = useState(false);
   const [notice, setNotice] = useState('');
   const [fullView, setFullView] = useState(null);
-  const totalCost = sumCosts(product);
-  const profit = productProfit(product);
+  const totalCost = sumCosts(draft);
+  const profit = productProfit(draft);
   const share = profit / 2;
   const canEditCredentials = user?.role === 'super_admin';
+  const isNewProduct = String(draft.id).startsWith('draft-');
+
+  useEffect(() => {
+    setDraft(product);
+    setDirty(false);
+    setNotice('');
+    setCostDraft({ label: '', amount: '', remark: '' });
+    setShowCostForm(false);
+  }, [product?.id]);
 
   const commitChange = (patch) => {
     try {
-      onChange(patch);
+      setDraft((current) => ({
+        ...current,
+        ...patch,
+        updatedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false })
+      }));
+      setDirty(true);
       return true;
     } catch {
-      setNotice('数据保存失败，请稍后重试；当前页面未完成写入。');
+      setNotice('草稿更新失败，请稍后重试。');
       return false;
     }
   };
@@ -1072,10 +1293,13 @@ function Workbench({ product, user, onChange }) {
       setNotice('请先填写成本后再标记售出，避免利润和分成被误算。');
       return;
     }
-    updateField('isSold', checked);
+    commitChange({
+      isSold: checked,
+      saleTime: checked && !draft.saleTime ? fromDateTimeInputValue(localDateTimeInput()) : draft.saleTime
+    });
   };
   const updatePaidStatus = (checked) => {
-    if (checked && !product.isSold) {
+    if (checked && !draft.isSold) {
       setNotice('请先标记售出，再登记回款。');
       return;
     }
@@ -1083,13 +1307,13 @@ function Workbench({ product, user, onChange }) {
   };
   const updateCost = (id, amount) => {
     setNotice('');
-    commitChange({ costs: product.costs.map((item) => item.id === id ? { ...item, amount: Number(amount) } : item) });
+    commitChange({ costs: draft.costs.map((item) => item.id === id ? { ...item, amount: amount === '' ? '' : Number(amount) } : item) });
   };
   const addCost = () => {
     if (!costDraft.label || !costDraft.amount) return;
     const saved = commitChange({
       costs: [
-        ...product.costs,
+        ...draft.costs,
         { id: Date.now(), label: costDraft.label, amount: Number(costDraft.amount), remark: costDraft.remark }
       ]
     });
@@ -1097,63 +1321,56 @@ function Workbench({ product, user, onChange }) {
     setCostDraft({ label: '', amount: '', remark: '' });
     setShowCostForm(false);
   };
-  const settleProduct = () => {
+  const settleProduct = async (rateSnapshot = {}) => {
     if (totalCost <= 0) {
       setNotice('请先填写成本后再结算。');
       return;
     }
-    if (!product.isPaid) {
+    if (!draft.isPaid) {
       setNotice('未回款产品暂不允许结算，请先确认回款状态。');
       return;
     }
-    if (commitChange({ settlementStatus: 'settled', settledAt: '2024-04-27 18:30' })) {
-      setNotice('已标记结算，利润分成按 USD 记录，右侧同步显示 CNY 换算。');
-    }
-  };
-  const pushToTelegram = async () => {
-    setNotice('正在推送到 Telegram...');
-    try {
-      const response = await fetch('/api/telegram/push', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          account: product.account,
-          password: product.password,
-          phoneCode: product.phoneCode,
-          phone: product.phone,
-          email: product.email,
-          securityCode: product.securityCode,
-          vpsRemoteUrl: product.vpsRemoteUrl
-        })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        setNotice(data.message || 'Telegram 推送失败，请稍后重试。');
-        return;
-      }
-      setNotice('已推送到关联的 Telegram Bot。');
-    } catch {
-      setNotice('Telegram 推送失败，请检查网络或后端配置。');
+    const nextDraft = {
+      ...draft,
+      settlementStatus: 'settled',
+      ...settlementCnySnapshot(share, rateSnapshot.rate),
+      settledAt: new Date().toLocaleString('zh-CN', { hour12: false }),
+      updatedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    };
+    const result = await onSave(nextDraft);
+    if (result.ok) {
+      setDraft(result.product);
+      setDirty(false);
+      setNotice('已保存结算状态，CNY 分成已按本次汇率锁定。');
+    } else {
+      setNotice(result.message || '结算状态保存失败，请稍后重试。');
     }
   };
   const openFullValue = (label, value) => {
     setFullView({ label, value: String(value || '') });
   };
+  const saveDraft = async () => {
+    setNotice('');
+    const result = await onSave(draft);
+    if (!result.ok) {
+      setNotice(result.message || '保存失败，请稍后重试。');
+      return;
+    }
+    setDraft(result.product);
+    setDirty(false);
+    setNotice('已保存，产品列表和工作台数据已同步。');
+  };
 
   return (
     <section className="page workbench-page">
-      <div className="steps">
-        {[
-          ['1', '基础信息', '填写产品基础信息'],
-          ['2', '成本录入', '录入各项成本并计算总成本'],
-          ['3', '销售登记', '登记销售信息与收款'],
-          ['4', '自动结算', '自动计算利润与分成']
-        ].map((step, index) => (
-          <div className={`step ${index === 1 ? 'active' : ''}`} key={step[0]}>
-            <b>{step[0]}</b><div><strong>{step[1]}</strong><span>{step[2]}</span></div>
-          </div>
-        ))}
+      <div className="workbench-toolbar">
+        <div>
+          <strong>{isNewProduct ? '新增产品草稿' : `产品 #${draft.id}`}</strong>
+          <span>{dirty ? '有未保存改动' : '已保存'}</span>
+        </div>
+        <button className="primary-button" type="button" disabled={saving || (!dirty && !isNewProduct)} onClick={saveDraft}>
+          <Save size={16} />{saving ? '保存中...' : isNewProduct ? '保存产品' : '保存修改'}
+        </button>
       </div>
       <div className="workbench-grid">
         <div className="workbench-main">
@@ -1162,31 +1379,30 @@ function Workbench({ product, user, onChange }) {
             title="基础信息"
             icon={FileText}
             subtitle="填写产品基础信息，为后续流程提供准备"
-            action={<button className="telegram-push" type="button" onClick={pushToTelegram}><Send size={15} />推送</button>}
           >
             {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、Google 验证、设备安全码、VPS 密码仅超级管理员可修改。</div>}
             <div className="form-grid">
-              <Input label="创建时间" value={product.createdAt.split(' ')[0]} icon={Calendar} onChange={(value) => updateField('createdAt', `${value} ${product.createdAt.split(' ')[1] || '10:28'}`)} />
-              <Input label="绑定邮箱" value={product.email} onChange={(value) => updateField('email', value)} />
-              <PhoneInput product={product} onChange={onChange} />
-              <Input label="账号" value={product.account} onChange={(value) => updateField('account', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="Google 验证" value={product.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="设备安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
-              <Input label="VPS 用户名" value={product.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} onOpenFull={openFullValue} />
-              <Input label="VPS IP" value={product.vpsIp} copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsIp', value)} />
-              <Input label="VPS 远程链接" value={product.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />
-              <Textarea label="备注" value={product.remark} copyable onOpenFull={openFullValue} onChange={(value) => updateField('remark', value)} />
+              <Input label="上架时间" type="date" value={productDateValue(draft) || localDateInput()} icon={Calendar} onChange={(value) => updateField('createdAt', value)} />
+              <Input label="绑定邮箱" value={draft.email} onChange={(value) => updateField('email', value)} />
+              <PhoneInput product={draft} onChange={(patch) => commitChange(patch)} />
+              <Input label="账号" value={draft.account} onChange={(value) => updateField('account', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="Google 验证" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="设备安全码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
+              <Input label="VPS 用户名" value={draft.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="VPS 密码" value={draft.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} onOpenFull={openFullValue} />
+              <Input label="VPS IP" value={draft.vpsIp} copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsIp', value)} />
+              <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />
+              <Textarea label="备注" value={draft.remark} copyable onOpenFull={openFullValue} onChange={(value) => updateField('remark', value)} />
             </div>
           </Section>
 
           <Section title="成本录入" icon={Coins} subtitle="录入各项成本，系统将自动计算总成本（USD）">
             <div className="cost-row">
-              {product.costs.map((item) => (
+              {draft.costs.map((item) => (
                 <label className="cost-input" key={item.id}>
                   <span>{item.label}（USD）</span>
-                  <input type="number" value={item.amount} onChange={(event) => updateCost(item.id, event.target.value)} />
+                  <input type="number" value={item.amount ?? ''} onChange={(event) => updateCost(item.id, event.target.value)} />
                 </label>
               ))}
               <button className="add-cost" onClick={() => setShowCostForm(true)}><Plus size={26} /><strong>添加成本标签</strong><span>支持自定义成本类别</span></button>
@@ -1194,11 +1410,11 @@ function Workbench({ product, user, onChange }) {
             </div>
             {showCostForm && (
               <div className="cost-popover">
-                <button className="close" onClick={() => setShowCostForm(false)}><X size={15} /></button>
+                <button className="close" type="button" aria-label="关闭成本表单" onClick={() => setShowCostForm(false)}><X size={16} /></button>
                 <Input label="成本名称" value={costDraft.label} onChange={(value) => setCostDraft({ ...costDraft, label: value })} />
                 <Input label="金额 USD" type="number" value={costDraft.amount} onChange={(value) => setCostDraft({ ...costDraft, amount: value })} />
                 <Input label="备注" value={costDraft.remark} onChange={(value) => setCostDraft({ ...costDraft, remark: value })} />
-                <button className="primary-button" onClick={addCost}>保存</button>
+                <button className="primary-button" type="button" onClick={addCost}>保存</button>
               </div>
             )}
             <div className="support-note"><Info size={15} /> 支持自定义成本标签，可添加其他任何成本类别</div>
@@ -1206,25 +1422,25 @@ function Workbench({ product, user, onChange }) {
 
           <Section title="销售登记" icon={LineChart} subtitle="登记销售信息与收款">
             <div className="sale-grid">
-              <Input label="售价（USD）" type="number" value={product.salePrice} onChange={(value) => updateField('salePrice', Number(value))} />
-              <Input label="销售时间" value={product.saleTime || '2024-04-27 10:28'} icon={Calendar} onChange={(value) => updateField('saleTime', value)} />
-              <Toggle label="是否售出" checked={product.isSold} onChange={updateSaleStatus} />
-              <Toggle label="是否回款" checked={product.isPaid} onChange={updatePaidStatus} />
-              <Textarea label="备注" value={product.saleRemark || ''} copyable onOpenFull={openFullValue} onChange={(value) => updateField('saleRemark', value)} />
+              <Input label="售价（USD）" type="number" value={draft.salePrice} onChange={(value) => updateField('salePrice', Number(value))} />
+              <Input label="销售时间" type="datetime-local" value={toDateTimeInputValue(draft.saleTime)} onChange={(value) => updateField('saleTime', fromDateTimeInputValue(value))} />
+              <Toggle label="是否售出" checked={draft.isSold} onChange={updateSaleStatus} />
+              <Toggle label="是否回款" checked={draft.isPaid} onChange={updatePaidStatus} />
+              <Textarea label="备注" value={draft.saleRemark || ''} copyable onOpenFull={openFullValue} onChange={(value) => updateField('saleRemark', value)} />
             </div>
           </Section>
 
           <Section title="自动结算" icon={ShieldCheck} subtitle="系统自动计算利润与分成（USD）">
             <div className="settlement-cards">
               <MiniSettle label="总成本（USD）" value={money(totalCost)} />
-              <MiniSettle label="售价（USD）" value={money(product.salePrice)} />
+              <MiniSettle label="售价（USD）" value={money(draft.salePrice)} />
               <MiniSettle label="利润（USD）" value={money(profit)} green />
               <MiniSettle label="香港分成（50%）" value={money(share)} />
               <MiniSettle label="武汉分成（50%）" value={money(share)} />
             </div>
           </Section>
         </div>
-        <ProfitPreview product={product} totalCost={totalCost} profit={profit} share={share} onSettle={settleProduct} />
+        <ProfitPreview product={draft} totalCost={totalCost} profit={profit} share={share} onSettle={settleProduct} />
       </div>
       {fullView && <FullValueModal label={fullView.label} value={fullView.value} onClose={() => setFullView(null)} />}
     </section>
@@ -1232,9 +1448,44 @@ function Workbench({ product, user, onChange }) {
 }
 
 function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
-  const rateAvailable = Number.isFinite(exchangeRate) && exchangeRate > 0;
+  const [exchangeRate, setExchangeRate] = useState(defaultExchangeRate);
+  const [rateMeta, setRateMeta] = useState({ date: '', source: exchangeRateSource });
+  const [rateLoading, setRateLoading] = useState(false);
+  const [rateError, setRateError] = useState('');
   const [usdAmount, setUsdAmount] = useState('');
   const [cnyAmount, setCnyAmount] = useState('');
+  const rateAvailable = Number.isFinite(exchangeRate) && exchangeRate > 0;
+  const isSettled = product.settlementStatus === 'settled';
+  const settlementSnapshot = productSettlementSnapshot(product, share);
+  const displayRate = isSettled && settlementSnapshot ? settlementSnapshot.rate : exchangeRate;
+  const displayHongKongCny = isSettled && settlementSnapshot ? settlementSnapshot.hongKong : share * exchangeRate;
+  const displayWuhanCny = isSettled && settlementSnapshot ? settlementSnapshot.wuhan : share * exchangeRate;
+
+  const loadExchangeRate = async (manual = false) => {
+    setRateLoading(true);
+    setRateError('');
+    try {
+      const data = await apiJson(`/api/exchange-rate${manual ? `?t=${Date.now()}` : ''}`);
+      const nextRate = normalizeExchangeRate(data.rate);
+      setExchangeRate(nextRate);
+      setRateMeta({ date: data.date || '', source: data.source || exchangeRateSource });
+      if (usdAmount !== '') {
+        const number = Number(usdAmount);
+        setCnyAmount(Number.isFinite(number) ? formatExchangeValue(number * nextRate) : '');
+      } else if (cnyAmount !== '') {
+        const number = Number(cnyAmount);
+        setUsdAmount(Number.isFinite(number) ? formatExchangeValue(number / nextRate) : '');
+      }
+    } catch (error) {
+      setRateError(error.message || '汇率获取失败，已使用默认汇率。');
+    } finally {
+      setRateLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadExchangeRate(false);
+  }, [product.id]);
 
   const updateUsdAmount = (value) => {
     setUsdAmount(value);
@@ -1258,10 +1509,16 @@ function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
         <PreviewLine icon={ShieldCheck} label="武汉分成（50%）" value={money(share)} />
       </Panel>
       <Panel className="rate-card">
-        <div className="rate-title">USD / CNY 换算 <RefreshCw size={14} /></div>
+        <div className="rate-title">
+          <span>USD / CNY 换算</span>
+          <button className="rate-refresh" type="button" onClick={() => loadExchangeRate(true)} disabled={rateLoading} aria-label="刷新 USD/CNY 汇率">
+            <RefreshCw size={14} />
+          </button>
+        </div>
         {rateAvailable ? (
           <>
             <p>1 USD = {exchangeRate.toFixed(2)} CNY <b>{exchangeRate.toFixed(2)} <span>CNY</span></b></p>
+            <div className="rate-meta">{rateLoading ? '正在刷新汇率...' : `${rateMeta.source}${rateMeta.date ? ` · ${rateMeta.date}` : ''}`}</div>
             <div className="exchange-converter">
               <label>
                 <span>USD</span>
@@ -1276,11 +1533,16 @@ function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
         ) : (
           <div className="rate-error"><AlertTriangle size={15} />汇率获取失败，CNY 换算暂不可用。</div>
         )}
+        {rateError && <div className="rate-warning"><AlertTriangle size={14} />{rateError}</div>}
       </Panel>
       <Panel className="rmb-card">
-        <div className="currency-note">左侧经营金额以 USD 记录；本模块仅用于分成折合 CNY。</div>
-        <PreviewLine icon={ShieldCheck} label="香港分成折合 CNY" value={rateAvailable ? cny(share * exchangeRate) : '-'} />
-        <PreviewLine icon={ShieldCheck} label="武汉分成折合 CNY" value={rateAvailable ? cny(share * exchangeRate) : '-'} />
+        <div className="currency-note">
+          {isSettled
+            ? `已结算金额按结算时汇率 ${displayRate.toFixed(4)} 锁定；上方换算器可继续查看当前汇率。`
+            : '未结算时按进入页面/手动刷新得到的最新汇率实时折合，结算后会锁定本次 CNY 金额。'}
+        </div>
+        <PreviewLine icon={ShieldCheck} label={isSettled ? '香港结算 CNY' : '香港分成折合 CNY'} value={rateAvailable ? cny(displayHongKongCny) : '-'} />
+        <PreviewLine icon={ShieldCheck} label={isSettled ? '武汉结算 CNY' : '武汉分成折合 CNY'} value={rateAvailable ? cny(displayWuhanCny) : '-'} />
       </Panel>
       <Panel className="settlement-status">
         <div className="status-head"><strong>结算状态</strong><StatusBadge label={product.settlementStatus === 'settled' ? '已结算' : '未结算'} /></div>
@@ -1288,9 +1550,9 @@ function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
         <div className="check-list"><span className={totalCost > 0 ? 'ok' : 'bad'}></span>{totalCost > 0 ? '已录入：成本信息' : '待处理：未填写成本'}</div>
         <div className="check-list"><span className={product.isPaid ? 'ok' : 'bad'}></span>{product.isPaid ? '已确认：回款完成' : '待处理：未回款不允许结算'}</div>
         <div className="check-list"><span className="bad"></span>{product.settlementStatus === 'settled' ? `已结算：${product.settledAt} Admin` : '未结算：尚未完成结算'}</div>
-        {product.settlementStatus !== 'settled' && <button className="primary-button full" onClick={onSettle}>标记为已结算</button>}
+        {product.settlementStatus !== 'settled' && <button className="primary-button full" onClick={() => onSettle({ rate: exchangeRate })}>标记为已结算</button>}
       </Panel>
-      <div className="calc-note">实时计算，自动更新</div>
+      <div className="calc-note">{isSettled ? '已结算 CNY 金额保持不变' : '实时计算，自动更新'}</div>
     </aside>
   );
 }
@@ -1306,11 +1568,22 @@ function Section({ title, subtitle, icon: Icon, action, children }) {
 
 function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabled = false, copyable = false, onOpenFull }) {
   const text = String(value ?? '');
+  const inputRef = useRef(null);
+  const opensNativePicker = ['date', 'datetime-local', 'time', 'month', 'week'].includes(type);
   return (
     <label className={`input-label ${wide ? 'wide' : ''}`}>
       <span>{label}</span>
-      <div className="input-shell" onDoubleClick={() => onOpenFull?.(label, text)} title="双击查看完整内容">
-        <input disabled={disabled} type={type} value={value ?? ''} onChange={(event) => onChange?.(event.target.value)} />
+      <div
+        className={`input-shell ${opensNativePicker ? 'date-input' : ''}`}
+        onClick={(event) => {
+          if (opensNativePicker && !event.target?.closest?.('button')) {
+            openNativePicker(inputRef.current);
+          }
+        }}
+        onDoubleClick={() => onOpenFull?.(label, text)}
+        title="双击查看完整内容"
+      >
+        <input ref={inputRef} disabled={disabled} type={type} value={value ?? ''} onChange={(event) => onChange?.(event.target.value)} />
         {Icon && <Icon size={15} />}
         {copyable && <CopyFieldButton value={text} disabled={disabled} />}
       </div>
@@ -1428,6 +1701,123 @@ function Panel({ title, hint, action, className = '', children }) {
     <section className={`panel ${className}`}>
       {(title || action) && <div className="panel-head"><div>{title && <h2>{title}</h2>}{hint && <p>{hint}</p>}</div>{action}</div>}
       {children}
+    </section>
+  );
+}
+
+function PushSettingsPage({ products, templates, onChange }) {
+  const [activeId, setActiveId] = useState(templates[0]?.id || defaultPushTemplates[0].id);
+  const activeTemplate = templates.find((item) => item.id === activeId) || templates[0] || defaultPushTemplates[0];
+  const previewProduct = products[0] || createBlankProduct();
+  const previewMessage = buildProductPushMessage(previewProduct, activeTemplate);
+
+  useEffect(() => {
+    if (!templates.some((item) => item.id === activeId)) {
+      setActiveId(templates[0]?.id || defaultPushTemplates[0].id);
+    }
+  }, [templates, activeId]);
+
+  const updateTemplate = (patch) => {
+    onChange((current) => current.map((item) => item.id === activeTemplate.id ? { ...item, ...patch } : item));
+  };
+  const addTemplate = () => {
+    const nextTemplate = {
+      id: `push-${Date.now()}`,
+      name: '新的列表页推送',
+      scene: 'products',
+      fields: defaultPushTemplateFields,
+      format: createPushFormat(defaultPushTemplateFields),
+      active: false
+    };
+    onChange((current) => [...current, nextTemplate]);
+    setActiveId(nextTemplate.id);
+  };
+  const deleteTemplate = () => {
+    if (templates.length <= 1) return;
+    const confirmed = window.confirm(`确定删除推送类型「${activeTemplate.name}」吗？`);
+    if (!confirmed) return;
+    onChange((current) => current.filter((item) => item.id !== activeTemplate.id));
+  };
+  const setActiveForScene = () => {
+    onChange((current) => current.map((item) => (
+      item.scene === activeTemplate.scene ? { ...item, active: item.id === activeTemplate.id } : item
+    )));
+  };
+  const toggleField = (fieldKey) => {
+    const exists = activeTemplate.fields.includes(fieldKey);
+    const fields = exists
+      ? activeTemplate.fields.filter((item) => item !== fieldKey)
+      : pushFieldOptions.filter((item) => [...activeTemplate.fields, fieldKey].includes(item.key)).map((item) => item.key);
+    updateTemplate({ fields, format: createPushFormat(fields) });
+  };
+
+  return (
+    <section className="page push-settings-page">
+      <div className="page-title"><h1>推送设置</h1><span>配置列表页推送类型、字段和消息格式</span></div>
+      <div className="push-settings-grid">
+        <Panel
+          title="推送类型"
+          hint="每个类型可以指定使用场景和推送内容"
+          className="push-type-panel"
+          action={<button className="primary-button" onClick={addTemplate}><Plus size={15} /> 新建推送类型</button>}
+        >
+          <div className="push-template-list">
+            {templates.map((template) => (
+              <button
+                key={template.id}
+                className={`push-template-card ${template.id === activeTemplate.id ? 'active' : ''}`}
+                onClick={() => setActiveId(template.id)}
+              >
+                <strong>{template.name}</strong>
+                <span>{template.scene === 'products' ? '推送列表页' : '自定义场景'} · {template.fields.length} 个字段</span>
+                {template.active && <b>当前使用</b>}
+              </button>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="内容格式" hint="选择字段后会生成默认格式，也可以继续手动调整文案">
+          <div className="push-editor">
+            <Input label="类型名称" value={activeTemplate.name} onChange={(value) => updateTemplate({ name: value })} />
+            <label className="input-label">
+              <span>使用场景</span>
+              <div className="input-shell">
+                <select value={activeTemplate.scene} onChange={(event) => updateTemplate({ scene: event.target.value })}>
+                  <option value="products">推送列表页</option>
+                </select>
+              </div>
+            </label>
+            <div className="field-picker wide-settings">
+              <span>选择推送信息</span>
+              <div className="field-grid">
+                {pushFieldOptions.map((field) => (
+                  <label className="checkbox-chip" key={field.key}>
+                    <input type="checkbox" checked={activeTemplate.fields.includes(field.key)} onChange={() => toggleField(field.key)} />
+                    <span>{field.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <label className="input-label wide-settings">
+              <span>推送格式</span>
+              <textarea
+                className="format-editor"
+                value={activeTemplate.format}
+                onChange={(event) => updateTemplate({ format: event.target.value })}
+              />
+            </label>
+            <div className="push-actions wide-settings">
+              <button className="primary-button" onClick={setActiveForScene}><Save size={15} /> 设为列表页当前模板</button>
+              <button className="secondary-button" onClick={() => updateTemplate({ format: createPushFormat(activeTemplate.fields) })}>恢复字段默认格式</button>
+              <button className="danger-button" disabled={templates.length <= 1} onClick={deleteTemplate}><Trash2 size={14} /> 删除</button>
+            </div>
+            <div className="push-preview wide-settings">
+              <strong>预览</strong>
+              <pre>{previewMessage}</pre>
+            </div>
+          </div>
+        </Panel>
+      </div>
     </section>
   );
 }

@@ -1,5 +1,6 @@
 const SESSION_COOKIE = 'gpc_session';
 const SESSION_MAX_AGE = 60 * 60 * 12;
+const DEFAULT_PRODUCTS = [];
 
 export class AuthStore {
   constructor(state, env) {
@@ -123,6 +124,29 @@ export class AuthStore {
       return json({ ok: true });
     }
 
+    if (url.pathname === '/products' && request.method === 'GET') {
+      return json({ products: await this.listProducts() });
+    }
+
+    if (url.pathname === '/products' && request.method === 'POST') {
+      const body = await readJson(request);
+      return json({ product: await this.saveProduct(body) }, 201);
+    }
+
+    if (url.pathname === '/products' && request.method === 'DELETE') {
+      const deleted = await this.clearProducts();
+      return json({ ok: true, deleted });
+    }
+
+    const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
+    if (productMatch && request.method === 'PUT') {
+      const id = decodeURIComponent(productMatch[1]);
+      const existing = await this.state.storage.get(`product:${id}`);
+      if (!existing) return json({ message: '产品不存在' }, 404);
+      const body = await readJson(request);
+      return json({ product: await this.saveProduct({ ...existing, ...body, id }, id) });
+    }
+
     if (url.pathname === '/login-requests' && request.method === 'GET') {
       const requests = [];
       const entries = await this.state.storage.list({ prefix: 'login_request:' });
@@ -168,6 +192,74 @@ export class AuthStore {
       createdAt: new Date().toISOString()
     });
   }
+
+  async ensureDefaultProducts() {
+    const seeded = await this.state.storage.get('products_seeded');
+    if (seeded) return;
+    if (DEFAULT_PRODUCTS.length) {
+      const entries = await this.state.storage.list({ prefix: 'product:' });
+      for (const product of DEFAULT_PRODUCTS) {
+        await this.state.storage.put(`product:${product.id}`, sanitizeProduct(product, product.id));
+      }
+    }
+    await this.state.storage.put('products_seeded', true);
+  }
+
+  async listProducts() {
+    await this.ensureDefaultProducts();
+    await this.cleanupDuplicateProducts();
+    const entries = await this.state.storage.list({ prefix: 'product:' });
+    return [...entries.values()].sort((a, b) => {
+      const dateCompare = String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+      return dateCompare || Number(b.id || 0) - Number(a.id || 0);
+    });
+  }
+
+  async cleanupDuplicateProducts() {
+    const entries = await this.state.storage.list({ prefix: 'product:' });
+    const groups = new Map();
+
+    for (const [key, product] of entries) {
+      const duplicateKey = productDuplicateKey(product);
+      if (!duplicateKey) continue;
+      const group = groups.get(duplicateKey) || [];
+      group.push({ key, product });
+      groups.set(duplicateKey, group);
+    }
+
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      const sorted = [...group].sort((a, b) => compareProductIds(a.product.id, b.product.id));
+      const [canonical, ...duplicates] = sorted;
+      const merged = duplicates.reduce((current, item) => mergeDuplicateProduct(current, item.product), canonical.product);
+
+      await this.state.storage.put(canonical.key, merged);
+      await Promise.all(duplicates.map((item) => this.state.storage.delete(item.key)));
+    }
+  }
+
+  async nextProductId() {
+    const products = await this.listProducts();
+    const maxId = products.reduce((max, product) => {
+      const id = Number(product.id);
+      return Number.isFinite(id) ? Math.max(max, id) : max;
+    }, 0);
+    return maxId + 1;
+  }
+
+  async saveProduct(input, fixedId) {
+    const id = fixedId ?? input.id ?? await this.nextProductId();
+    const product = sanitizeProduct(input, id);
+    await this.state.storage.put(`product:${product.id}`, product);
+    return product;
+  }
+
+  async clearProducts() {
+    const entries = await this.state.storage.list({ prefix: 'product:' });
+    await Promise.all([...entries.keys()].map((key) => this.state.storage.delete(key)));
+    await this.state.storage.put('products_seeded', true);
+    return entries.size;
+  }
 }
 
 export default {
@@ -183,6 +275,10 @@ export default {
 };
 
 async function handleApi(request, env, url) {
+  if (url.pathname === '/api/exchange-rate' && request.method === 'GET') {
+    return fetchUsdCnyRate();
+  }
+
   if (!env.AUTH_STORE || !env.SESSION_SECRET) {
     return json({ message: '认证后端未配置，请检查 AUTH_STORE 和 SESSION_SECRET' }, 503);
   }
@@ -292,6 +388,26 @@ async function handleApi(request, env, url) {
     }
   }
 
+  if (url.pathname === '/api/products' && ['GET', 'POST', 'DELETE'].includes(request.method)) {
+    if (request.method === 'DELETE' && sessionUser.role !== 'super_admin') {
+      return json({ message: '只有超级管理员可以清空产品数据' }, 403);
+    }
+    return authStore(env).fetch(new Request('https://auth.local/products', {
+      method: request.method,
+      body: request.method === 'POST' ? await request.text() : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  const productMatch = url.pathname.match(/^\/api\/products\/([^/]+)$/);
+  if (productMatch && request.method === 'PUT') {
+    return authStore(env).fetch(new Request(`https://auth.local/products/${productMatch[1]}`, {
+      method: 'PUT',
+      body: await request.text(),
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
   if (url.pathname === '/api/telegram/push' && request.method === 'POST') {
     return pushTelegramMessage(request, env);
   }
@@ -307,8 +423,8 @@ async function pushTelegramMessage(request, env) {
   }
 
   const body = await readJson(request);
-  const phone = [body.phoneCode, body.phone].filter(Boolean).join(' ');
-  const message = [
+  const phone = formatPhoneNumber(body.phoneCode, body.phone);
+  const message = body.message ? cleanMessage(body.message) : [
     `账号：${cleanLine(body.account)}`,
     `密码：${cleanLine(body.password)}`,
     `绑定手机号：${cleanLine(phone)}`,
@@ -316,6 +432,8 @@ async function pushTelegramMessage(request, env) {
     `设备安全码：${cleanLine(body.securityCode)}`,
     `VPS登录链接：${cleanLine(body.vpsRemoteUrl)}`
   ].join('\n');
+
+  if (!message) return json({ message: '推送内容为空，请检查推送设置。' }, 400);
 
   const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: 'POST',
@@ -350,6 +468,23 @@ async function fetchSessionUser(env, username) {
 
 function cleanLine(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function formatPhoneNumber(phoneCode, phone) {
+  const code = cleanLine(phoneCode);
+  const rawPhone = cleanLine(phone);
+  if (!code) return rawPhone;
+  if (!rawPhone) return code;
+
+  const normalizedCode = code.replace(/^\+/, '');
+  const normalizedPhone = rawPhone.replace(/^[+\s-]+/, '');
+  if (normalizedPhone === normalizedCode) return code;
+  if (normalizedPhone.startsWith(normalizedCode)) return `${code} ${normalizedPhone.slice(normalizedCode.length).trim()}`;
+  return `${code} ${rawPhone}`;
+}
+
+function cleanMessage(value) {
+  return String(value || '').replace(/\r\n?/g, '\n').trim().slice(0, 4096);
 }
 
 async function readJson(request) {
@@ -392,6 +527,156 @@ function adminUser(user) {
     ...publicUser(user),
     initialPassword: user.role === 'partner_admin' ? user.initialPassword || '' : ''
   };
+}
+
+function sanitizeProduct(input, id) {
+  const now = new Date();
+  const updatedAt = now.toLocaleTimeString('zh-CN', { hour12: false });
+  return {
+    id: normalizeProductId(id),
+    createdAt: cleanLine(input.createdAt) || now.toISOString().slice(0, 10),
+    account: cleanLine(input.account),
+    email: cleanLine(input.email),
+    phoneCode: cleanLine(input.phoneCode) || '+86',
+    phone: cleanLine(input.phone),
+    password: cleanLine(input.password),
+    googleAuth: cleanLine(input.googleAuth),
+    securityCode: cleanLine(input.securityCode),
+    vpsIp: cleanLine(input.vpsIp),
+    vpsRemoteUrl: cleanLine(input.vpsRemoteUrl),
+    vpsUsername: cleanLine(input.vpsUsername),
+    vpsPassword: cleanLine(input.vpsPassword),
+    remark: String(input.remark || '').slice(0, 200),
+    costs: Array.isArray(input.costs) ? input.costs.map(sanitizeCost).filter(Boolean) : [],
+    salePrice: numberOrZero(input.salePrice),
+    saleTime: cleanLine(input.saleTime),
+    isSold: Boolean(input.isSold),
+    isPaid: Boolean(input.isPaid),
+    settlementStatus: input.settlementStatus === 'settled' ? 'settled' : 'unsettled',
+    settledAt: cleanLine(input.settledAt),
+    settlementExchangeRate: positiveNumberOrNull(input.settlementExchangeRate),
+    settlementShareCnyHongKong: nullableNumber(input.settlementShareCnyHongKong),
+    settlementShareCnyWuhan: nullableNumber(input.settlementShareCnyWuhan),
+    saleRemark: String(input.saleRemark || '').slice(0, 200),
+    updatedAt
+  };
+}
+
+function productDuplicateKey(product) {
+  const createdDate = cleanLine(product.createdAt).slice(0, 10);
+  if (!createdDate) return '';
+
+  const account = cleanLine(product.account).toLowerCase();
+  const email = cleanLine(product.email).toLowerCase();
+  const phone = [cleanLine(product.phoneCode), cleanLine(product.phone)].filter(Boolean).join(' ').toLowerCase();
+  const vpsRemoteUrl = cleanLine(product.vpsRemoteUrl).toLowerCase();
+  const identity = [account, email, phone, vpsRemoteUrl].filter(Boolean).join('|');
+
+  return identity ? `${createdDate}|${identity}` : '';
+}
+
+function mergeDuplicateProduct(base, duplicate) {
+  const merged = { ...base };
+  const textFields = [
+    'account',
+    'email',
+    'phoneCode',
+    'phone',
+    'password',
+    'googleAuth',
+    'securityCode',
+    'vpsIp',
+    'vpsRemoteUrl',
+    'vpsUsername',
+    'vpsPassword',
+    'remark',
+    'saleTime',
+    'settledAt',
+    'settlementExchangeRate',
+    'settlementShareCnyHongKong',
+    'settlementShareCnyWuhan',
+    'saleRemark',
+    'updatedAt'
+  ];
+
+  for (const field of textFields) {
+    const value = cleanLine(duplicate[field]);
+    if (value) merged[field] = duplicate[field];
+  }
+
+  if (Array.isArray(duplicate.costs) && sumProductCosts(duplicate) >= sumProductCosts(merged)) {
+    merged.costs = duplicate.costs;
+  }
+  if (numberOrZero(duplicate.salePrice) > 0) merged.salePrice = numberOrZero(duplicate.salePrice);
+
+  merged.isSold = Boolean(base.isSold || duplicate.isSold);
+  merged.isPaid = Boolean(base.isPaid || duplicate.isPaid);
+  merged.settlementStatus = base.settlementStatus === 'settled' || duplicate.settlementStatus === 'settled' ? 'settled' : 'unsettled';
+
+  return merged;
+}
+
+function sumProductCosts(product) {
+  return Array.isArray(product.costs)
+    ? product.costs.reduce((total, item) => total + numberOrZero(item?.amount), 0)
+    : 0;
+}
+
+function compareProductIds(a, b) {
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right)) return left - right;
+  return String(a || '').localeCompare(String(b || ''));
+}
+
+function sanitizeCost(item, index) {
+  const label = cleanLine(item?.label);
+  if (!label) return null;
+  return {
+    id: normalizeProductId(item.id || Date.now() + index),
+    label,
+    amount: item.amount === '' ? '' : numberOrZero(item.amount),
+    remark: String(item.remark || '').slice(0, 120)
+  };
+}
+
+function normalizeProductId(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && String(value).trim() !== '' ? number : cleanLine(value);
+}
+
+function numberOrZero(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function nullableNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function positiveNumberOrNull(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+async function fetchUsdCnyRate() {
+  const response = await fetch('https://api.frankfurter.app/latest?from=USD&to=CNY', {
+    headers: { Accept: 'application/json' }
+  });
+  if (!response.ok) return json({ message: '汇率获取失败，请稍后重试' }, 502);
+
+  const data = await response.json().catch(() => ({}));
+  const rate = Number(data?.rates?.CNY);
+  if (!Number.isFinite(rate) || rate <= 0) return json({ message: '汇率数据异常，请稍后重试' }, 502);
+
+  return json({
+    base: 'USD',
+    quote: 'CNY',
+    rate,
+    date: cleanLine(data.date),
+    source: 'Frankfurter'
+  });
 }
 
 function nowSeconds() {
