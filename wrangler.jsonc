@@ -7,5 +7,19 @@
     "binding": "ASSETS",
     "directory": "./dist",
     "not_found_handling": "single-page-application"
-  }
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUTH_STORE",
+        "class_name": "AuthStore"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AuthStore"]
+    }
+  ]
 }

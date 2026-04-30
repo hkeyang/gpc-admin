@@ -310,8 +310,9 @@ function App() {
   const [products, setProducts] = useState(initialProducts);
   const [activeId, setActiveId] = useState(1);
   const [deviceId] = useState(getDeviceId);
-  const [authState, setAuthState] = useState({ loading: true, authenticated: false, deviceAuthorized: false });
+  const [authState, setAuthState] = useState({ loading: true, authenticated: false, user: null, pendingRequestId: '' });
   const activeProduct = products.find((item) => item.id === activeId) || products[0];
+  const currentUser = authState.user;
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -327,9 +328,10 @@ function App() {
       .then((data) => setAuthState({
         loading: false,
         authenticated: Boolean(data.authenticated),
-        deviceAuthorized: Boolean(data.deviceAuthorized)
+        user: data.user || null,
+        pendingRequestId: ''
       }))
-      .catch(() => setAuthState({ loading: false, authenticated: false, deviceAuthorized: false }));
+      .catch(() => setAuthState({ loading: false, authenticated: false, user: null, pendingRequestId: '' }));
   }, []);
 
   const setPage = (nextPage) => {
@@ -361,46 +363,46 @@ function App() {
       });
       const data = await response.json();
       if (!response.ok) return { ok: false, message: data.message || '登录失败' };
-      setAuthState({ loading: false, authenticated: true, deviceAuthorized: false });
-      return { ok: true, requiresDeviceApproval: true };
+      if (!data.approved) {
+        setAuthState({ loading: false, authenticated: false, user: null, pendingRequestId: data.requestId || '' });
+        return { ok: true, pendingApproval: true, requestId: data.requestId, message: data.message };
+      }
+      setAuthState({ loading: false, authenticated: true, user: data.user, pendingRequestId: '' });
+      return { ok: true, pendingApproval: false };
     } catch {
       return { ok: false, message: '后端认证服务不可用，请使用 Wrangler/Cloudflare 部署运行' };
     }
   };
 
-  const authorizeCurrentDevice = async (approvalCode) => {
+  const checkLoginRequest = async (requestId) => {
     try {
-      const response = await fetch('/api/auth/authorize-device', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId, approvalCode })
-      });
+      const response = await fetch(`/api/auth/login-status?request_id=${encodeURIComponent(requestId)}`, { credentials: 'include' });
       const data = await response.json();
-      if (!response.ok) return { ok: false, message: data.message || '设备授权失败' };
-      setAuthState({ loading: false, authenticated: true, deviceAuthorized: true });
-      return { ok: true };
+      if (!response.ok) return { ok: false, message: data.message || '登录申请状态查询失败' };
+      if (!data.approved) return { ok: true, approved: false, message: '还在等待超级管理员批准' };
+      setAuthState({ loading: false, authenticated: true, user: data.user, pendingRequestId: '' });
+      return { ok: true, approved: true };
     } catch {
-      return { ok: false, message: '后端设备授权服务不可用' };
+      return { ok: false, message: '后端登录审批服务不可用' };
     }
   };
 
   const logout = async () => {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
-    setAuthState({ loading: false, authenticated: false, deviceAuthorized: false });
+    setAuthState({ loading: false, authenticated: false, user: null, pendingRequestId: '' });
   };
 
   if (authState.loading) {
     return <div className="auth-loading"><RefreshCw size={22} /> 正在验证登录状态...</div>;
   }
 
-  if (!authState.authenticated || !authState.deviceAuthorized) {
+  if (!authState.authenticated) {
     return (
       <LoginPage
         deviceId={deviceId}
-        hasSession={authState.authenticated}
+        pendingRequestId={authState.pendingRequestId}
         onLogin={handleLogin}
-        onAuthorize={authorizeCurrentDevice}
+        onCheckApproval={checkLoginRequest}
       />
     );
   }
@@ -409,7 +411,7 @@ function App() {
     <div className="app">
       <Sidebar current={page} onChange={setPage} />
       <main className="main">
-        <Topbar id={activeProduct.id} onLogout={logout} />
+        <Topbar id={activeProduct.id} user={currentUser} onLogout={logout} />
         {page === 'dashboard' && <Dashboard products={products} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
         {page === 'products' && (
           <ProductsPage
@@ -421,19 +423,20 @@ function App() {
           />
         )}
         {page === 'workbench' && (
-          <Workbench product={activeProduct} onChange={(patch) => updateProduct(activeProduct.id, patch)} />
+          <Workbench product={activeProduct} user={currentUser} onChange={(patch) => updateProduct(activeProduct.id, patch)} />
         )}
-        {page === 'settings' && <SettingsPage />}
+        {page === 'settings' && <SettingsPage user={currentUser} />}
       </main>
     </div>
   );
 }
 
-function LoginPage({ deviceId, hasSession, onLogin, onAuthorize }) {
+function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
-  const [approvalCode, setApprovalCode] = useState('');
   const [message, setMessage] = useState('');
+  const [localRequestId, setLocalRequestId] = useState(pendingRequestId);
+  const activeRequestId = pendingRequestId || localRequestId;
 
   const submit = async (event) => {
     event.preventDefault();
@@ -442,12 +445,19 @@ function LoginPage({ deviceId, hasSession, onLogin, onAuthorize }) {
       setMessage(result.message);
       return;
     }
-    setMessage(result.requiresDeviceApproval ? '密码正确，请完成当前设备授权' : '');
+    if (result.pendingApproval) {
+      setLocalRequestId(result.requestId);
+      setMessage(result.message || '登录申请已提交，等待超级管理员批准');
+      return;
+    }
+    setMessage('');
   };
 
-  const submitDeviceApproval = async () => {
-    const result = await onAuthorize(approvalCode);
-    if (!result.ok) setMessage(result.message);
+  const checkApproval = async () => {
+    const result = await onCheckApproval(activeRequestId);
+    if (!result.ok || !result.approved) {
+      setMessage(result.message || '还在等待超级管理员批准');
+    }
   };
 
   return (
@@ -464,7 +474,7 @@ function LoginPage({ deviceId, hasSession, onLogin, onAuthorize }) {
           <h1>后台登录</h1>
           <p>账号密码验证后，仅授权设备可进入管理后台。</p>
         </div>
-        {!hasSession ? (
+        {!activeRequestId ? (
           <form className="login-form" onSubmit={submit}>
             <label>
               <span>管理员账号</span>
@@ -482,36 +492,23 @@ function LoginPage({ deviceId, hasSession, onLogin, onAuthorize }) {
             </label>
             {message && <div className="login-error">{message}</div>}
             <button className="primary-button login-submit" type="submit"><Lock size={16} /> 登录后台</button>
-            <div className="login-demo">账号、密码和设备授权码由后端环境变量控制</div>
+            <div className="login-demo">超级管理员直接进入；伙伴管理员登录后需等待超级管理员批准</div>
           </form>
         ) : (
           <div className="device-card">
             <ShieldCheck size={34} />
-            <h2>当前设备待授权</h2>
+            <h2>等待超级管理员授权</h2>
             <p>设备指纹</p>
             <code>{deviceId}</code>
-            <label className="approval-field">
-              <span>设备授权码</span>
-              <input
-                type="password"
-                value={approvalCode}
-                onChange={(event) => setApprovalCode(event.target.value)}
-                placeholder="请输入管理员授权码"
-              />
-            </label>
+            <p>登录申请</p>
+            <code>{activeRequestId}</code>
             {message && <div className="login-error">{message}</div>}
-            <button className="primary-button login-submit" onClick={submitDeviceApproval}>授权当前设备并进入</button>
-            <span>授权码由管理员保管；后端验证通过后才会签发已授权会话。</span>
+            <button className="primary-button login-submit" onClick={checkApproval}>我已获得批准，进入后台</button>
+            <button className="secondary-button login-submit" onClick={() => { setLocalRequestId(''); setMessage(''); }}>返回登录</button>
+            <span>超级管理员在“系统设置”里点击同意后，你才能进入后台。</span>
           </div>
         )}
       </section>
-      <aside className="security-panel">
-        <h2>建议上线保护</h2>
-        <div><ShieldCheck size={18} /> HTTPS 传输加密</div>
-        <div><Lock size={18} /> 密码 Hash 存储</div>
-        <div><EyeOff size={18} /> 敏感字段加密入库</div>
-        <div><Database size={18} /> 操作日志与备份</div>
-      </aside>
     </main>
   );
 }
@@ -561,14 +558,15 @@ function Sidebar({ current, onChange }) {
   );
 }
 
-function Topbar({ id, onLogout }) {
+function Topbar({ id, user, onLogout }) {
+  const roleLabel = user?.role === 'super_admin' ? '超级管理员' : '伙伴管理员';
   return (
     <header className="topbar">
       <div className="topbar-spacer" />
       <div className="pill">系统ID：{id}<Info size={14} /></div>
       <div className="data-time"><RefreshCw size={15} /> 数据更新：10:30:45</div>
-      <div className="avatar">A</div>
-      <div className="admin">Admin<span>管理员</span></div>
+      <div className="avatar">{user?.username?.slice(0, 1)?.toUpperCase() || 'A'}</div>
+      <div className="admin">{user?.username || 'Admin'}<span>{roleLabel}</span></div>
       <button className="logout-button" onClick={onLogout}>退出</button>
     </header>
   );
@@ -732,7 +730,7 @@ function ProductsPage({ products, onOpenWorkbench }) {
 
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
-      const keywordText = [item.id, item.account, item.email, item.phone, item.vpsIp, item.vpsRemoteUrl].join(' ').toLowerCase();
+      const keywordText = [item.id, item.account, item.phone, item.vpsRemoteUrl].join(' ').toLowerCase();
       const matchesKeyword = keywordText.includes(keyword.toLowerCase());
       const matchesSale = saleFilter === '全部' || (saleFilter === '待售' ? !item.isSold : item.isSold);
       const matchesPaid = paidFilter === '全部' || (paidFilter === '未回款' ? !item.isPaid : item.isPaid);
@@ -753,7 +751,7 @@ function ProductsPage({ products, onOpenWorkbench }) {
       <div className="list-layout">
         <Panel className="list-panel">
           <div className="filters">
-            <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索 ID / 账号 / 邮箱 / 手机号 / VPS IP" /></label>
+            <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索 ID / 账号 / 手机号 / 远程链接" /></label>
             <FilterSelect label="销售状态" value={saleFilter} onChange={setSaleFilter} options={['全部', '待售', '已售']} />
             <FilterSelect label="回款状态" value={paidFilter} onChange={setPaidFilter} options={['全部', '未回款', '已回款']} />
             <FilterSelect label="结算状态" value={settlementFilter} onChange={setSettlementFilter} options={['全部', '未结算', '已结算']} />
@@ -795,7 +793,7 @@ function ProductTable({ products, onOpenWorkbench }) {
     <table className="product-table">
       <thead>
         <tr>
-          <th>ID</th><th>创建时间</th><th>账号</th><th>绑定邮箱</th><th>VPS IP</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
+          <th>ID</th><th>创建时间</th><th>账号</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -807,8 +805,6 @@ function ProductTable({ products, onOpenWorkbench }) {
               <td>{item.id}</td>
               <td>{item.createdAt}</td>
               <td>{item.account}</td>
-              <td>{item.email}</td>
-              <td>{item.vpsIp}</td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
@@ -824,13 +820,14 @@ function ProductTable({ products, onOpenWorkbench }) {
   );
 }
 
-function Workbench({ product, onChange }) {
+function Workbench({ product, user, onChange }) {
   const [visible, setVisible] = useState({});
   const [costDraft, setCostDraft] = useState({ label: '', amount: '', remark: '' });
   const [showCostForm, setShowCostForm] = useState(false);
   const totalCost = sumCosts(product);
   const profit = productProfit(product);
   const share = profit / 2;
+  const canManageSensitive = user?.role === 'super_admin';
 
   const updateField = (field, value) => onChange({ [field]: value });
   const updateCost = (id, amount) => {
@@ -865,19 +862,20 @@ function Workbench({ product, onChange }) {
       <div className="workbench-grid">
         <div className="workbench-main">
           <Section title="基础信息" icon={FileText} subtitle="填写产品基础信息，为后续流程提供准备">
+            {!canManageSensitive && <div className="permission-note"><Lock size={15} /> 伙伴管理员只能维护成本与销售金额，基础账号、密码、VPS 信息不可修改或查看。</div>}
             <div className="form-grid">
-              <Input label="创建时间" value={product.createdAt.split(' ')[0]} icon={Calendar} onChange={(value) => updateField('createdAt', `${value} ${product.createdAt.split(' ')[1] || '10:28'}`)} />
-              <Input label="绑定邮箱" value={product.email} onChange={(value) => updateField('email', value)} />
-              <PhoneInput product={product} onChange={onChange} />
-              <Input label="账号" value={product.account} onChange={(value) => updateField('account', value)} />
-              <SecretInput label="Google 验证" value={product.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
-              <SecretInput label="安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
-              <SecretInput label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} />
-              <Input label="VPS 用户名" value={product.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
-              <SecretInput label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} />
-              <Input label="VPS IP" value={product.vpsIp} onChange={(value) => updateField('vpsIp', value)} />
-              <Input label="VPS 远程链接" value={product.vpsRemoteUrl} wide onChange={(value) => updateField('vpsRemoteUrl', value)} />
-              <Textarea label="备注" value={product.remark} onChange={(value) => updateField('remark', value)} />
+              <Input disabled={!canManageSensitive} label="创建时间" value={product.createdAt.split(' ')[0]} icon={Calendar} onChange={(value) => updateField('createdAt', `${value} ${product.createdAt.split(' ')[1] || '10:28'}`)} />
+              <Input disabled={!canManageSensitive} label="绑定邮箱" value={product.email} onChange={(value) => updateField('email', value)} />
+              <PhoneInput disabled={!canManageSensitive} product={product} onChange={onChange} />
+              <Input disabled={!canManageSensitive} label="账号" value={product.account} onChange={(value) => updateField('account', value)} />
+              <SecretInput disabled={!canManageSensitive} label="Google 验证" value={product.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
+              <SecretInput disabled={!canManageSensitive} label="安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
+              <SecretInput disabled={!canManageSensitive} label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} />
+              <Input disabled={!canManageSensitive} label="VPS 用户名" value={product.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
+              <SecretInput disabled={!canManageSensitive} label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} />
+              <Input disabled={!canManageSensitive} label="VPS IP" value={product.vpsIp} onChange={(value) => updateField('vpsIp', value)} />
+              <Input disabled={!canManageSensitive} label="VPS 远程链接" value={product.vpsRemoteUrl} wide onChange={(value) => updateField('vpsRemoteUrl', value)} />
+              <Textarea disabled={!canManageSensitive} label="备注" value={product.remark} onChange={(value) => updateField('remark', value)} />
             </div>
           </Section>
 
@@ -969,50 +967,51 @@ function Section({ title, subtitle, icon: Icon, children }) {
   );
 }
 
-function Input({ label, value, onChange, icon: Icon, wide, type = 'text' }) {
+function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabled = false }) {
   return (
     <label className={`input-label ${wide ? 'wide' : ''}`}>
       <span>{label}</span>
       <div className="input-shell">
-        <input type={type} value={value ?? ''} onChange={(event) => onChange?.(event.target.value)} />
+        <input disabled={disabled} type={type} value={value ?? ''} onChange={(event) => onChange?.(event.target.value)} />
         {Icon && <Icon size={15} />}
       </div>
     </label>
   );
 }
 
-function SecretInput({ label, value, visible, onToggle, onChange }) {
+function SecretInput({ label, value, visible, onToggle, onChange, disabled = false }) {
+  const canReveal = !disabled;
   return (
     <label className="input-label">
       <span>{label}</span>
       <div className="input-shell">
-        <input type={visible ? 'text' : 'password'} value={value || ''} onChange={(event) => onChange(event.target.value)} />
-        <button type="button" onClick={onToggle}>{visible ? <EyeOff size={15} /> : <Eye size={15} />}</button>
-        <button type="button" onClick={() => navigator.clipboard?.writeText(value || '')}><Copy size={15} /></button>
+        <input disabled={disabled} type={visible && canReveal ? 'text' : 'password'} value={disabled ? '********' : (value || '')} onChange={(event) => onChange(event.target.value)} />
+        <button disabled={!canReveal} type="button" onClick={onToggle}>{visible ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+        <button disabled={!canReveal} type="button" onClick={() => navigator.clipboard?.writeText(value || '')}><Copy size={15} /></button>
       </div>
     </label>
   );
 }
 
-function PhoneInput({ product, onChange }) {
+function PhoneInput({ product, onChange, disabled = false }) {
   return (
     <label className="input-label">
       <span>绑定手机号</span>
       <div className="phone-shell">
-        <select value={product.phoneCode} onChange={(event) => onChange({ phoneCode: event.target.value })}>
+        <select disabled={disabled} value={product.phoneCode} onChange={(event) => onChange({ phoneCode: event.target.value })}>
           <option>+86</option><option>+852</option><option>+1</option>
         </select>
-        <input value={product.phone} onChange={(event) => onChange({ phone: event.target.value })} />
+        <input disabled={disabled} value={product.phone} onChange={(event) => onChange({ phone: event.target.value })} />
       </div>
     </label>
   );
 }
 
-function Textarea({ label, value, onChange }) {
+function Textarea({ label, value, onChange, disabled = false }) {
   return (
     <label className="input-label wide">
       <span>{label}</span>
-      <textarea value={value || ''} maxLength={200} placeholder="请输入备注信息（可选）" onChange={(event) => onChange(event.target.value)} />
+      <textarea disabled={disabled} value={value || ''} maxLength={200} placeholder="请输入备注信息（可选）" onChange={(event) => onChange(event.target.value)} />
       <em>{(value || '').length} / 200</em>
     </label>
   );
@@ -1054,15 +1053,113 @@ function Panel({ title, hint, action, className = '', children }) {
   );
 }
 
-function SettingsPage() {
+function SettingsPage({ user }) {
+  const isSuperAdmin = user?.role === 'super_admin';
+  const [users, setUsers] = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [accountDraft, setAccountDraft] = useState({ username: '', password: '' });
+  const [settingsMessage, setSettingsMessage] = useState('');
+
+  const loadAdminData = async () => {
+    if (!isSuperAdmin) return;
+    const [usersResponse, requestsResponse] = await Promise.all([
+      fetch('/api/admin/users', { credentials: 'include' }),
+      fetch('/api/admin/login-requests', { credentials: 'include' })
+    ]);
+    if (usersResponse.ok) setUsers((await usersResponse.json()).users || []);
+    if (requestsResponse.ok) setRequests((await requestsResponse.json()).requests || []);
+  };
+
+  useEffect(() => {
+    loadAdminData();
+  }, [isSuperAdmin]);
+
+  const createPartner = async () => {
+    setSettingsMessage('');
+    const response = await fetch('/api/admin/users', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: accountDraft.username, password: accountDraft.password, role: 'partner_admin' })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setSettingsMessage(data.message || '创建账号失败');
+      return;
+    }
+    setSettingsMessage(`已创建伙伴管理员：${data.user.username}`);
+    setAccountDraft({ username: '', password: '' });
+    loadAdminData();
+  };
+
+  const approveLogin = async (requestId) => {
+    const response = await fetch(`/api/admin/login-requests/${requestId}/approve`, {
+      method: 'POST',
+      credentials: 'include'
+    });
+    if (!response.ok) {
+      const data = await response.json();
+      setSettingsMessage(data.message || '审批失败');
+      return;
+    }
+    setSettingsMessage('已同意该伙伴管理员登录');
+    loadAdminData();
+  };
+
   return (
     <section className="page settings-page">
       <Panel title="系统设置">
-        <div className="settings-placeholder">
-          <Lock size={34} />
-          <h2>账号与基础配置</h2>
-          <p>第一期预留登录账号、汇率来源、成本标签、操作日志入口。</p>
-        </div>
+        {!isSuperAdmin ? (
+          <div className="settings-placeholder">
+            <Lock size={34} />
+            <h2>权限受限</h2>
+            <p>伙伴管理员只能录入成本和销售金额，不能管理账号、审批登录或查看敏感配置。</p>
+          </div>
+        ) : (
+          <div className="settings-admin-grid">
+            <section className="settings-block">
+              <h3>生成伙伴管理员账号</h3>
+              <p>伙伴管理员登录后需要你在这里同意，且不能修改账号密码、Google 验证、安全码、VPS 信息。</p>
+              <div className="settings-form">
+                <Input label="账号" value={accountDraft.username} onChange={(value) => setAccountDraft({ ...accountDraft, username: value })} />
+                <Input label="初始密码" type="password" value={accountDraft.password} onChange={(value) => setAccountDraft({ ...accountDraft, password: value })} />
+                <button className="primary-button" onClick={createPartner}>创建伙伴账号</button>
+              </div>
+              {settingsMessage && <div className="settings-message">{settingsMessage}</div>}
+            </section>
+            <section className="settings-block">
+              <h3>待审批登录</h3>
+              <div className="approval-list">
+                {requests.filter((item) => item.status === 'pending').length === 0 && <p>暂无待审批登录申请</p>}
+                {requests.filter((item) => item.status === 'pending').map((item) => (
+                  <div className="approval-row" key={item.id}>
+                    <div>
+                      <strong>{item.username}</strong>
+                      <span>{new Date(item.createdAt).toLocaleString('zh-CN')} · {item.deviceId}</span>
+                    </div>
+                    <button className="primary-button" onClick={() => approveLogin(item.id)}>同意登录</button>
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section className="settings-block wide-settings">
+              <h3>账号列表</h3>
+              <table className="settings-table">
+                <thead><tr><th>账号</th><th>角色</th><th>状态</th><th>创建时间</th></tr></thead>
+                <tbody>
+                  {users.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.username}</td>
+                      <td>{item.role === 'super_admin' ? '超级管理员' : '伙伴管理员'}</td>
+                      <td>{item.status === 'active' ? '启用' : '停用'}</td>
+                      <td>{new Date(item.createdAt).toLocaleString('zh-CN')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          </div>
+        )}
       </Panel>
     </section>
   );

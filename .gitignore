@@ -5,3 +5,5 @@ qa/
 .DS_Store
 *.log
 .dev.vars
+.wrangler/
+*-check.png
