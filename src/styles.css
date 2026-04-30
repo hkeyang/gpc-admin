@@ -347,7 +347,7 @@ nav { display: grid; gap: 8px; }
 .list-panel { padding: 12px; min-width: 0; overflow-x: auto; }
 .filters {
   display: grid;
-  grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(230px, 270px);
+  grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(154px, 180px);
   gap: 10px;
   align-items: end;
   margin-bottom: 14px;
@@ -377,17 +377,16 @@ nav { display: grid; gap: 8px; }
   min-width: 0;
   height: 26px;
   border-radius: 5px;
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px minmax(28px, 1fr) 14px;
   align-items: center;
-  justify-content: center;
-  gap: 4px;
   color: #68758b;
   font-size: 11px;
   font-weight: 800;
 }
 .date-range button:hover { background: #f4f6fb; color: var(--purple); }
-.date-range button svg { flex: 0 0 auto; color: #8c96aa; pointer-events: none; }
-.date-range button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.date-range button svg { color: #8c96aa; pointer-events: none; }
+.date-range button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; text-align: center; }
 .date-range b {
   font-weight: 800;
   color: #9aa4b6;
@@ -402,12 +401,13 @@ nav { display: grid; gap: 8px; }
 }
 .filters-actions {
   display: grid;
-  grid-template-columns: 72px minmax(136px, 1fr);
-  gap: 10px;
+  grid-template-columns: 58px minmax(86px, 1fr);
+  gap: 8px;
   align-self: end;
   min-width: 0;
 }
 .filters-actions button { width: 100%; white-space: nowrap; }
+.filters-actions .primary-button { padding: 0 9px; gap: 5px; }
 .secondary-button, .primary-button, .danger-button { min-height: 34px; border-radius: 7px; font-weight: 800; font-size: 12px; line-height: 1.25; }
 .secondary-button { background: #fff; border: 1px solid #e5e8f0; color: #4e5b72; }
 .primary-button { background: linear-gradient(180deg, #5f49ff, #4b32e8); color: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; box-shadow: 0 8px 18px rgba(79, 57, 246, .25); }
@@ -895,7 +895,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .sale-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
   .settings-admin-grid { grid-template-columns: 1fr; }
   .push-settings-grid { grid-template-columns: 1fr; }
-  .filters { grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(230px, 270px); }
+  .filters { grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(154px, 180px); }
 }
 
 @media (max-width: 900px) {
@@ -909,7 +909,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .dashboard-grid, .bottom-grid, .list-layout, .workbench-grid, .form-grid, .sale-grid, .settlement-cards { grid-template-columns: 1fr; }
   .wide { grid-column: auto; }
   .filters {
-    grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(230px, 270px);
+    grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(154px, 180px);
     min-width: max-content;
   }
   .product-table { min-width: 900px; }
