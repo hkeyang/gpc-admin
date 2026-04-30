@@ -63,7 +63,7 @@ export class AuthStore {
     if (url.pathname === '/users' && request.method === 'GET') {
       const users = [];
       const entries = await this.state.storage.list({ prefix: 'user:' });
-      for (const user of entries.values()) users.push(publicUser(user));
+      for (const user of entries.values()) users.push(adminUser(user));
       return json({ users: users.sort((a, b) => a.createdAt.localeCompare(b.createdAt)) });
     }
 
@@ -85,10 +85,42 @@ export class AuthStore {
         role,
         status: 'active',
         passwordHash: await hashPbkdf2(password),
+        initialPassword: role === 'partner_admin' ? password : undefined,
         createdAt: new Date().toISOString()
       };
       await this.state.storage.put(`user:${username}`, user);
-      return json({ user: publicUser(user) }, 201);
+      return json({ user: adminUser(user) }, 201);
+    }
+
+    const userMatch = url.pathname.match(/^\/users\/([^/]+)$/);
+    if (userMatch && request.method === 'GET') {
+      const username = decodeURIComponent(userMatch[1]);
+      const user = await this.state.storage.get(`user:${username}`);
+      if (!user) return json({ message: '账号不存在' }, 404);
+      return json({ user: publicUser(user) });
+    }
+
+    const statusMatch = url.pathname.match(/^\/users\/([^/]+)\/status$/);
+    if (statusMatch && request.method === 'PATCH') {
+      const username = decodeURIComponent(statusMatch[1]);
+      const body = await readJson(request);
+      const status = body.status === 'active' ? 'active' : 'disabled';
+      const user = await this.state.storage.get(`user:${username}`);
+      if (!user) return json({ message: '账号不存在' }, 404);
+      if (user.role === 'super_admin') return json({ message: '不能停用超级管理员账号' }, 400);
+      user.status = status;
+      user.updatedAt = new Date().toISOString();
+      await this.state.storage.put(`user:${username}`, user);
+      return json({ user: adminUser(user) });
+    }
+
+    if (userMatch && request.method === 'DELETE') {
+      const username = decodeURIComponent(userMatch[1]);
+      const user = await this.state.storage.get(`user:${username}`);
+      if (!user) return json({ message: '账号不存在' }, 404);
+      if (user.role === 'super_admin') return json({ message: '不能删除超级管理员账号' }, 400);
+      await this.state.storage.delete(`user:${username}`);
+      return json({ ok: true });
     }
 
     if (url.pathname === '/login-requests' && request.method === 'GET') {
@@ -157,9 +189,15 @@ async function handleApi(request, env, url) {
 
   if (url.pathname === '/api/auth/me' && request.method === 'GET') {
     const session = await readSession(request, env);
+    const sessionUser = session ? await fetchSessionUser(env, session.username) : null;
+    if (session && !sessionUser) {
+      return json({ authenticated: false, user: null }, 200, {
+        'Set-Cookie': `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`
+      });
+    }
     return json({
-      authenticated: Boolean(session),
-      user: session ? { id: session.userId, username: session.username, role: session.role } : null
+      authenticated: Boolean(sessionUser),
+      user: sessionUser
     });
   }
 
@@ -212,9 +250,15 @@ async function handleApi(request, env, url) {
 
   const session = await readSession(request, env);
   if (!session) return json({ message: '登录已过期，请重新登录' }, 401);
+  const sessionUser = await fetchSessionUser(env, session.username);
+  if (!sessionUser) {
+    return json({ message: '账号已被停用或删除，请重新登录' }, 403, {
+      'Set-Cookie': `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`
+    });
+  }
 
   if (url.pathname.startsWith('/api/admin/')) {
-    if (session.role !== 'super_admin') return json({ message: '只有超级管理员可以操作' }, 403);
+    if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以操作' }, 403);
 
     if (url.pathname === '/api/admin/users') {
       return authStore(env).fetch(new Request('https://auth.local/users', {
@@ -222,6 +266,20 @@ async function handleApi(request, env, url) {
         body: request.method === 'POST' ? await request.text() : undefined,
         headers: { 'Content-Type': 'application/json' }
       }));
+    }
+
+    const userStatusMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/status$/);
+    if (userStatusMatch && request.method === 'PATCH') {
+      return authStore(env).fetch(new Request(`https://auth.local/users/${userStatusMatch[1]}/status`, {
+        method: 'PATCH',
+        body: await request.text(),
+        headers: { 'Content-Type': 'application/json' }
+      }));
+    }
+
+    const userMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+    if (userMatch && request.method === 'DELETE') {
+      return authStore(env).fetch(new Request(`https://auth.local/users/${userMatch[1]}`, { method: 'DELETE' }));
     }
 
     if (url.pathname === '/api/admin/login-requests') {
@@ -281,6 +339,15 @@ function authStore(env) {
   return env.AUTH_STORE.get(env.AUTH_STORE.idFromName('global'));
 }
 
+async function fetchSessionUser(env, username) {
+  const response = await authStore(env).fetch(`https://auth.local/users/${encodeURIComponent(username)}`);
+  if (!response.ok) return null;
+  const data = await response.json();
+  const user = data.user;
+  if (!user || user.status !== 'active') return null;
+  return user;
+}
+
 function cleanLine(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
 }
@@ -317,6 +384,13 @@ function publicUser(user) {
     role: user.role,
     status: user.status,
     createdAt: user.createdAt
+  };
+}
+
+function adminUser(user) {
+  return {
+    ...publicUser(user),
+    initialPassword: user.role === 'partner_admin' ? user.initialPassword || '' : ''
   };
 }
 

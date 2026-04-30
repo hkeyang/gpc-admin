@@ -25,12 +25,14 @@ import {
   LineChart,
   Lock,
   Plus,
+  Power,
   RefreshCw,
   Search,
   Send,
   Settings,
   ShieldCheck,
   ShoppingCart,
+  Trash2,
   TrendingUp,
   UserRound,
   WalletCards,
@@ -284,8 +286,6 @@ const businessTrend30 = [
   { date: '04-27', sales: 33040, profit: 9355 }
 ];
 
-const customTrend = businessTrend.slice(2, 6);
-
 const monthBars = [
   { month: '11月', cost: 11990, profit: 9940 },
   { month: '12月', cost: 13740, profit: 11400 },
@@ -317,6 +317,10 @@ function formatExchangeValue(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '';
   return Number(number.toFixed(2)).toString();
+}
+
+function trendDateValue(date) {
+  return `2024-${date}`;
 }
 
 function sumCosts(product) {
@@ -365,6 +369,7 @@ function App() {
   const [authState, setAuthState] = useState({ loading: true, authenticated: false, user: null, pendingRequestId: '' });
   const activeProduct = products.find((item) => item.id === activeId) || products[0];
   const currentUser = authState.user;
+  const isSuperAdmin = currentUser?.role === 'super_admin';
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -387,9 +392,18 @@ function App() {
   }, []);
 
   const setPage = (nextPage) => {
+    if (nextPage === 'settings' && !isSuperAdmin) {
+      nextPage = 'dashboard';
+    }
     setPageState(nextPage);
     window.history.replaceState(null, '', `#/${nextPage}`);
   };
+
+  useEffect(() => {
+    if (authState.authenticated && page === 'settings' && !isSuperAdmin) {
+      setPage('dashboard');
+    }
+  }, [authState.authenticated, page, isSuperAdmin]);
 
   const addProduct = () => {
     const now = new Date();
@@ -492,7 +506,7 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar current={page} onChange={setPage} />
+      <Sidebar current={page} onChange={setPage} user={currentUser} />
       <main className="main">
         <Topbar user={currentUser} onLogout={logout} />
         {page === 'dashboard' && <Dashboard products={products} onOpenProducts={() => setPage('products')} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
@@ -509,7 +523,7 @@ function App() {
         {page === 'workbench' && (
           <Workbench product={activeProduct} user={currentUser} onChange={(patch) => updateProduct(activeProduct.id, patch)} />
         )}
-        {page === 'settings' && <SettingsPage user={currentUser} />}
+        {page === 'settings' && isSuperAdmin && <SettingsPage user={currentUser} />}
       </main>
     </div>
   );
@@ -596,13 +610,14 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
   );
 }
 
-function Sidebar({ current, onChange }) {
+function Sidebar({ current, onChange, user }) {
+  const isSuperAdmin = user?.role === 'super_admin';
   const nav = [
     { id: 'dashboard', label: '首页', icon: Home },
     { id: 'products', label: '产品列表', icon: ClipboardList },
     { id: 'workbench', label: '产品工作台', icon: WalletCards },
     { id: 'settings', label: '系统设置', icon: Settings }
-  ];
+  ].filter((item) => item.id !== 'settings' || isSuperAdmin);
 
   return (
     <aside className="sidebar">
@@ -647,6 +662,7 @@ function Topbar({ user, onLogout }) {
 
 function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
   const [trendRange, setTrendRange] = useState('7d');
+  const [customTrendRange, setCustomTrendRange] = useState({ from: '2024-04-23', to: '2024-04-26' });
   const total = products.length;
   const sold = products.filter((item) => item.isSold).length;
   const totalProfit = products.filter((item) => item.isSold).reduce((sum, item) => sum + productProfit(item), 0);
@@ -660,7 +676,15 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
     { name: '已售', value: products.filter((item) => item.isSold).length, color: '#26c281' },
     { name: '已下架', value: 1, color: '#8290a8' }
   ];
-  const activeTrend = trendRange === '30d' ? businessTrend30 : trendRange === 'custom' ? customTrend : businessTrend;
+  const activeTrend = useMemo(() => {
+    if (trendRange === '30d') return businessTrend30;
+    if (trendRange !== 'custom') return businessTrend;
+    const filtered = businessTrend30.filter((item) => (
+      (!customTrendRange.from || trendDateValue(item.date) >= customTrendRange.from) &&
+      (!customTrendRange.to || trendDateValue(item.date) <= customTrendRange.to)
+    ));
+    return filtered.length ? filtered : businessTrend30;
+  }, [trendRange, customTrendRange]);
   const trendLabel = trendRange === '30d' ? '近 30 天' : trendRange === 'custom' ? '自定义区间' : '近 7 天';
   const trendPeak = Math.max(...activeTrend.map((item) => item.profit));
   const trendPeakDate = activeTrend.find((item) => item.profit === trendPeak)?.date;
@@ -682,7 +706,7 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
       </div>
 
       <div className="dashboard-grid">
-        <Panel className="overview-panel" title="经营总览" hint="单位：USD" action={<ChartTabs active={trendRange} onChange={setTrendRange} onDownload={downloadTrend} />}>
+        <Panel className="overview-panel" title="经营总览" hint="单位：USD" action={<ChartTabs active={trendRange} customRange={customTrendRange} onChange={setTrendRange} onCustomRangeChange={setCustomTrendRange} onDownload={downloadTrend} />}>
           <ChartLegend items={[
             { label: '销售额', color: '#7a5cf8' },
             { label: '利润', color: '#4f9ff8' }
@@ -778,18 +802,30 @@ function Kpi({ icon: Icon, label, value, sub, tone, negative }) {
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
-        <p>{sub} <b className={negative ? 'down' : 'up'}>{negative ? '↓' : '↑'}</b></p>
+        {sub && <p><span>{sub}</span><b className={negative ? 'down' : 'up'}>{negative ? '↓' : '↑'}</b></p>}
       </div>
     </div>
   );
 }
 
-function ChartTabs({ active, onChange, onDownload }) {
+function ChartTabs({ active, customRange, onChange, onCustomRangeChange, onDownload }) {
+  const updateCustomRange = (key, value) => {
+    onCustomRangeChange((current) => ({ ...current, [key]: value }));
+    onChange('custom');
+  };
+
   return (
     <div className="chart-tabs">
       <button className={active === '7d' ? 'active' : ''} onClick={() => onChange('7d')}>近7天</button>
       <button className={active === '30d' ? 'active' : ''} onClick={() => onChange('30d')}>近30天</button>
       <button className={active === 'custom' ? 'active' : ''} onClick={() => onChange('custom')}>自定义</button>
+      {active === 'custom' && (
+        <div className="custom-date-range">
+          <input aria-label="自定义开始日期" type="date" value={customRange.from} onChange={(event) => updateCustomRange('from', event.target.value)} />
+          <span>-</span>
+          <input aria-label="自定义结束日期" type="date" value={customRange.to} onChange={(event) => updateCustomRange('to', event.target.value)} />
+        </div>
+      )}
       <button className="icon-button" aria-label="下载经营数据" onClick={onDownload}><Download size={15} /></button>
     </div>
   );
@@ -1449,6 +1485,40 @@ function SettingsPage({ user }) {
     loadAdminData();
   };
 
+  const updateUserStatus = async (targetUser, status) => {
+    setSettingsMessage('');
+    const response = await fetch(`/api/admin/users/${encodeURIComponent(targetUser.username)}/status`, {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setSettingsMessage(data.message || '账号状态更新失败');
+      return;
+    }
+    setSettingsMessage(`${status === 'active' ? '已启用' : '已禁用'}伙伴管理员：${targetUser.username}`);
+    loadAdminData();
+  };
+
+  const deleteUser = async (targetUser) => {
+    setSettingsMessage('');
+    const confirmed = window.confirm(`确定删除伙伴管理员账号「${targetUser.username}」吗？删除后将无法登录。`);
+    if (!confirmed) return;
+    const response = await fetch(`/api/admin/users/${encodeURIComponent(targetUser.username)}`, {
+      method: 'DELETE',
+      credentials: 'include'
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setSettingsMessage(data.message || '删除账号失败');
+      return;
+    }
+    setSettingsMessage(`已删除伙伴管理员：${targetUser.username}`);
+    loadAdminData();
+  };
+
   return (
     <section className="page settings-page">
       <Panel title="系统设置">
@@ -1488,14 +1558,32 @@ function SettingsPage({ user }) {
             <section className="settings-block wide-settings">
               <h3>账号列表</h3>
               <table className="settings-table">
-                <thead><tr><th>账号</th><th>角色</th><th>状态</th><th>创建时间</th></tr></thead>
+                <thead><tr><th>账号</th><th>角色</th><th>登录密码</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
                 <tbody>
                   {users.map((item) => (
                     <tr key={item.id}>
                       <td>{item.username}</td>
                       <td>{item.role === 'super_admin' ? '超级管理员' : '伙伴管理员'}</td>
+                      <td>{item.role === 'partner_admin' ? (item.initialPassword || '未记录') : '-'}</td>
                       <td>{item.status === 'active' ? '启用' : '停用'}</td>
                       <td>{new Date(item.createdAt).toLocaleString('zh-CN')}</td>
+                      <td>
+                        {item.role === 'partner_admin' ? (
+                          <div className="settings-actions">
+                            <button
+                              className="secondary-button"
+                              onClick={() => updateUserStatus(item, item.status === 'active' ? 'disabled' : 'active')}
+                            >
+                              <Power size={14} /> {item.status === 'active' ? '禁用' : '启用'}
+                            </button>
+                            <button className="danger-button" onClick={() => deleteUser(item)}>
+                              <Trash2 size={14} /> 删除
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="muted-text">不可操作</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
