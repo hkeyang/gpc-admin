@@ -51,6 +51,27 @@ import {
 import './styles.css';
 
 const exchangeRate = 6.84;
+const demoCredentials = {
+  username: 'admin',
+  password: 'GPC@2024'
+};
+
+function getDeviceId() {
+  const storageKey = 'gpc_device_id';
+  const existing = window.localStorage.getItem(storageKey);
+  if (existing) return existing;
+  const next = window.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.localStorage.setItem(storageKey, next);
+  return next;
+}
+
+function getAuthorizedDevices() {
+  try {
+    return JSON.parse(window.localStorage.getItem('gpc_authorized_devices') || '[]');
+  } catch {
+    return [];
+  }
+}
 
 const initialProducts = [
   {
@@ -300,7 +321,11 @@ function App() {
   const [page, setPageState] = useState(() => window.location.hash.replace('#/', '') || 'dashboard');
   const [products, setProducts] = useState(initialProducts);
   const [activeId, setActiveId] = useState(1);
+  const [deviceId] = useState(getDeviceId);
+  const [authorizedDevices, setAuthorizedDevices] = useState(getAuthorizedDevices);
+  const [session, setSession] = useState(() => window.localStorage.getItem('gpc_session') || '');
   const activeProduct = products.find((item) => item.id === activeId) || products[0];
+  const isDeviceAuthorized = authorizedDevices.includes(deviceId);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -329,11 +354,43 @@ function App() {
     );
   };
 
+  const handleLogin = (username, password) => {
+    if (username !== demoCredentials.username || password !== demoCredentials.password) {
+      return { ok: false, message: '账号或密码错误' };
+    }
+    const token = `session-${Date.now()}`;
+    window.localStorage.setItem('gpc_session', token);
+    setSession(token);
+    return { ok: true, requiresDeviceApproval: !isDeviceAuthorized };
+  };
+
+  const authorizeCurrentDevice = () => {
+    const nextDevices = Array.from(new Set([...authorizedDevices, deviceId]));
+    window.localStorage.setItem('gpc_authorized_devices', JSON.stringify(nextDevices));
+    setAuthorizedDevices(nextDevices);
+  };
+
+  const logout = () => {
+    window.localStorage.removeItem('gpc_session');
+    setSession('');
+  };
+
+  if (!session || !isDeviceAuthorized) {
+    return (
+      <LoginPage
+        deviceId={deviceId}
+        hasSession={Boolean(session)}
+        onLogin={handleLogin}
+        onAuthorize={authorizeCurrentDevice}
+      />
+    );
+  }
+
   return (
     <div className="app">
       <Sidebar current={page} onChange={setPage} />
       <main className="main">
-        <Topbar id={activeProduct.id} />
+        <Topbar id={activeProduct.id} onLogout={logout} />
         {page === 'dashboard' && <Dashboard products={products} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
         {page === 'products' && (
           <ProductsPage
@@ -350,6 +407,77 @@ function App() {
         {page === 'settings' && <SettingsPage />}
       </main>
     </div>
+  );
+}
+
+function LoginPage({ deviceId, hasSession, onLogin, onAuthorize }) {
+  const [username, setUsername] = useState('admin');
+  const [password, setPassword] = useState('');
+  const [message, setMessage] = useState('');
+
+  const submit = (event) => {
+    event.preventDefault();
+    const result = onLogin(username, password);
+    if (!result.ok) {
+      setMessage(result.message);
+      return;
+    }
+    setMessage(result.requiresDeviceApproval ? '密码正确，请完成当前设备授权' : '');
+  };
+
+  return (
+    <main className="login-page">
+      <section className="login-card">
+        <div className="login-brand">
+          <div className="google-mark"><span>G</span></div>
+          <div>
+            <strong>GPC管理</strong>
+            <p>轻量产品管理平台</p>
+          </div>
+        </div>
+        <div className="login-copy">
+          <h1>后台登录</h1>
+          <p>账号密码验证后，仅授权设备可进入管理后台。</p>
+        </div>
+        {!hasSession ? (
+          <form className="login-form" onSubmit={submit}>
+            <label>
+              <span>管理员账号</span>
+              <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+            </label>
+            <label>
+              <span>登录密码</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="请输入密码"
+                autoComplete="current-password"
+              />
+            </label>
+            {message && <div className="login-error">{message}</div>}
+            <button className="primary-button login-submit" type="submit"><Lock size={16} /> 登录后台</button>
+            <div className="login-demo">演示账号：admin　演示密码：GPC@2024</div>
+          </form>
+        ) : (
+          <div className="device-card">
+            <ShieldCheck size={34} />
+            <h2>当前设备待授权</h2>
+            <p>设备指纹</p>
+            <code>{deviceId}</code>
+            <button className="primary-button login-submit" onClick={onAuthorize}>授权当前设备并进入</button>
+            <span>正式上线时应改为管理员在服务端审批设备。</span>
+          </div>
+        )}
+      </section>
+      <aside className="security-panel">
+        <h2>建议上线保护</h2>
+        <div><ShieldCheck size={18} /> HTTPS 传输加密</div>
+        <div><Lock size={18} /> 密码 Hash 存储</div>
+        <div><EyeOff size={18} /> 敏感字段加密入库</div>
+        <div><Database size={18} /> 操作日志与备份</div>
+      </aside>
+    </main>
   );
 }
 
@@ -398,7 +526,7 @@ function Sidebar({ current, onChange }) {
   );
 }
 
-function Topbar({ id }) {
+function Topbar({ id, onLogout }) {
   return (
     <header className="topbar">
       <div className="topbar-spacer" />
@@ -406,7 +534,7 @@ function Topbar({ id }) {
       <div className="data-time"><RefreshCw size={15} /> 数据更新：10:30:45</div>
       <div className="avatar">A</div>
       <div className="admin">Admin<span>管理员</span></div>
-      <ChevronDown size={16} className="muted" />
+      <button className="logout-button" onClick={onLogout}>退出</button>
     </header>
   );
 }
