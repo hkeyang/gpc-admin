@@ -827,7 +827,7 @@ function Workbench({ product, user, onChange }) {
   const totalCost = sumCosts(product);
   const profit = productProfit(product);
   const share = profit / 2;
-  const canManageSensitive = user?.role === 'super_admin';
+  const canManageCredentials = user?.role === 'super_admin';
 
   const updateField = (field, value) => onChange({ [field]: value });
   const updateCost = (id, amount) => {
@@ -862,20 +862,20 @@ function Workbench({ product, user, onChange }) {
       <div className="workbench-grid">
         <div className="workbench-main">
           <Section title="基础信息" icon={FileText} subtitle="填写产品基础信息，为后续流程提供准备">
-            {!canManageSensitive && <div className="permission-note"><Lock size={15} /> 伙伴管理员只能维护成本与销售金额，基础账号、密码、VPS 信息不可修改或查看。</div>}
+            {!canManageCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可维护业务资料；账号密码、Google 验证、安全码、VPS 密码仅超级管理员可查看和修改。</div>}
             <div className="form-grid">
-              <Input disabled={!canManageSensitive} label="创建时间" value={product.createdAt.split(' ')[0]} icon={Calendar} onChange={(value) => updateField('createdAt', `${value} ${product.createdAt.split(' ')[1] || '10:28'}`)} />
-              <Input disabled={!canManageSensitive} label="绑定邮箱" value={product.email} onChange={(value) => updateField('email', value)} />
-              <PhoneInput disabled={!canManageSensitive} product={product} onChange={onChange} />
-              <Input disabled={!canManageSensitive} label="账号" value={product.account} onChange={(value) => updateField('account', value)} />
-              <SecretInput disabled={!canManageSensitive} label="Google 验证" value={product.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
-              <SecretInput disabled={!canManageSensitive} label="安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
-              <SecretInput disabled={!canManageSensitive} label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} />
-              <Input disabled={!canManageSensitive} label="VPS 用户名" value={product.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
-              <SecretInput disabled={!canManageSensitive} label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} />
-              <Input disabled={!canManageSensitive} label="VPS IP" value={product.vpsIp} onChange={(value) => updateField('vpsIp', value)} />
-              <Input disabled={!canManageSensitive} label="VPS 远程链接" value={product.vpsRemoteUrl} wide onChange={(value) => updateField('vpsRemoteUrl', value)} />
-              <Textarea disabled={!canManageSensitive} label="备注" value={product.remark} onChange={(value) => updateField('remark', value)} />
+              <Input label="创建时间" value={product.createdAt.split(' ')[0]} icon={Calendar} onChange={(value) => updateField('createdAt', `${value} ${product.createdAt.split(' ')[1] || '10:28'}`)} />
+              <Input label="绑定邮箱" value={product.email} onChange={(value) => updateField('email', value)} />
+              <PhoneInput product={product} onChange={onChange} />
+              <Input label="账号" value={product.account} onChange={(value) => updateField('account', value)} />
+              <SecretInput disabled={!canManageCredentials} label="Google 验证" value={product.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
+              <SecretInput disabled={!canManageCredentials} label="安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
+              <SecretInput disabled={!canManageCredentials} label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} />
+              <Input label="VPS 用户名" value={product.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
+              <SecretInput disabled={!canManageCredentials} label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} />
+              <Input label="VPS IP" value={product.vpsIp} onChange={(value) => updateField('vpsIp', value)} />
+              <Input label="VPS 远程链接" value={product.vpsRemoteUrl} wide onChange={(value) => updateField('vpsRemoteUrl', value)} />
+              <Textarea label="备注" value={product.remark} onChange={(value) => updateField('remark', value)} />
             </div>
           </Section>
 
@@ -1113,13 +1113,13 @@ function SettingsPage({ user }) {
           <div className="settings-placeholder">
             <Lock size={34} />
             <h2>权限受限</h2>
-            <p>伙伴管理员只能录入成本和销售金额，不能管理账号、审批登录或查看敏感配置。</p>
+            <p>合作伙伴管理员权限接近超级管理员，但不能管理后台账号、审批登录或查看/修改敏感凭据。</p>
           </div>
         ) : (
           <div className="settings-admin-grid">
             <section className="settings-block">
               <h3>生成伙伴管理员账号</h3>
-              <p>伙伴管理员登录后需要你在这里同意，且不能修改账号密码、Google 验证、安全码、VPS 信息。</p>
+              <p>伙伴管理员登录后需要你在这里同意；进入后可维护业务数据，但不能管理后台账号或查看/修改敏感凭据。</p>
               <div className="settings-form">
                 <Input label="账号" value={accountDraft.username} onChange={(value) => setAccountDraft({ ...accountDraft, username: value })} />
                 <Input label="初始密码" type="password" value={accountDraft.password} onChange={(value) => setAccountDraft({ ...accountDraft, password: value })} />
