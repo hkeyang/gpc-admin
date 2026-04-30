@@ -1,0 +1,4 @@
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=pbkdf2_sha256$310000$replace_with_salt$replace_with_hash
+DEVICE_APPROVAL_CODE_HASH=pbkdf2_sha256$310000$replace_with_salt$replace_with_hash
+SESSION_SECRET=replace_with_long_random_string

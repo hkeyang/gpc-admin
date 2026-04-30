@@ -51,10 +51,6 @@ import {
 import './styles.css';
 
 const exchangeRate = 6.84;
-const demoCredentials = {
-  username: 'admin',
-  password: 'GPC@2024'
-};
 
 function getDeviceId() {
   const storageKey = 'gpc_device_id';
@@ -63,14 +59,6 @@ function getDeviceId() {
   const next = window.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   window.localStorage.setItem(storageKey, next);
   return next;
-}
-
-function getAuthorizedDevices() {
-  try {
-    return JSON.parse(window.localStorage.getItem('gpc_authorized_devices') || '[]');
-  } catch {
-    return [];
-  }
 }
 
 const initialProducts = [
@@ -322,10 +310,8 @@ function App() {
   const [products, setProducts] = useState(initialProducts);
   const [activeId, setActiveId] = useState(1);
   const [deviceId] = useState(getDeviceId);
-  const [authorizedDevices, setAuthorizedDevices] = useState(getAuthorizedDevices);
-  const [session, setSession] = useState(() => window.localStorage.getItem('gpc_session') || '');
+  const [authState, setAuthState] = useState({ loading: true, authenticated: false, deviceAuthorized: false });
   const activeProduct = products.find((item) => item.id === activeId) || products[0];
-  const isDeviceAuthorized = authorizedDevices.includes(deviceId);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -333,6 +319,17 @@ function App() {
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then((response) => response.json())
+      .then((data) => setAuthState({
+        loading: false,
+        authenticated: Boolean(data.authenticated),
+        deviceAuthorized: Boolean(data.deviceAuthorized)
+      }))
+      .catch(() => setAuthState({ loading: false, authenticated: false, deviceAuthorized: false }));
   }, []);
 
   const setPage = (nextPage) => {
@@ -354,32 +351,54 @@ function App() {
     );
   };
 
-  const handleLogin = (username, password) => {
-    if (username !== demoCredentials.username || password !== demoCredentials.password) {
-      return { ok: false, message: '账号或密码错误' };
+  const handleLogin = async (username, password) => {
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, deviceId })
+      });
+      const data = await response.json();
+      if (!response.ok) return { ok: false, message: data.message || '登录失败' };
+      setAuthState({ loading: false, authenticated: true, deviceAuthorized: false });
+      return { ok: true, requiresDeviceApproval: true };
+    } catch {
+      return { ok: false, message: '后端认证服务不可用，请使用 Wrangler/Cloudflare 部署运行' };
     }
-    const token = `session-${Date.now()}`;
-    window.localStorage.setItem('gpc_session', token);
-    setSession(token);
-    return { ok: true, requiresDeviceApproval: !isDeviceAuthorized };
   };
 
-  const authorizeCurrentDevice = () => {
-    const nextDevices = Array.from(new Set([...authorizedDevices, deviceId]));
-    window.localStorage.setItem('gpc_authorized_devices', JSON.stringify(nextDevices));
-    setAuthorizedDevices(nextDevices);
+  const authorizeCurrentDevice = async (approvalCode) => {
+    try {
+      const response = await fetch('/api/auth/authorize-device', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId, approvalCode })
+      });
+      const data = await response.json();
+      if (!response.ok) return { ok: false, message: data.message || '设备授权失败' };
+      setAuthState({ loading: false, authenticated: true, deviceAuthorized: true });
+      return { ok: true };
+    } catch {
+      return { ok: false, message: '后端设备授权服务不可用' };
+    }
   };
 
-  const logout = () => {
-    window.localStorage.removeItem('gpc_session');
-    setSession('');
+  const logout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    setAuthState({ loading: false, authenticated: false, deviceAuthorized: false });
   };
 
-  if (!session || !isDeviceAuthorized) {
+  if (authState.loading) {
+    return <div className="auth-loading"><RefreshCw size={22} /> 正在验证登录状态...</div>;
+  }
+
+  if (!authState.authenticated || !authState.deviceAuthorized) {
     return (
       <LoginPage
         deviceId={deviceId}
-        hasSession={Boolean(session)}
+        hasSession={authState.authenticated}
         onLogin={handleLogin}
         onAuthorize={authorizeCurrentDevice}
       />
@@ -413,16 +432,22 @@ function App() {
 function LoginPage({ deviceId, hasSession, onLogin, onAuthorize }) {
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
+  const [approvalCode, setApprovalCode] = useState('');
   const [message, setMessage] = useState('');
 
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault();
-    const result = onLogin(username, password);
+    const result = await onLogin(username, password);
     if (!result.ok) {
       setMessage(result.message);
       return;
     }
     setMessage(result.requiresDeviceApproval ? '密码正确，请完成当前设备授权' : '');
+  };
+
+  const submitDeviceApproval = async () => {
+    const result = await onAuthorize(approvalCode);
+    if (!result.ok) setMessage(result.message);
   };
 
   return (
@@ -457,7 +482,7 @@ function LoginPage({ deviceId, hasSession, onLogin, onAuthorize }) {
             </label>
             {message && <div className="login-error">{message}</div>}
             <button className="primary-button login-submit" type="submit"><Lock size={16} /> 登录后台</button>
-            <div className="login-demo">演示账号：admin　演示密码：GPC@2024</div>
+            <div className="login-demo">账号、密码和设备授权码由后端环境变量控制</div>
           </form>
         ) : (
           <div className="device-card">
@@ -465,8 +490,18 @@ function LoginPage({ deviceId, hasSession, onLogin, onAuthorize }) {
             <h2>当前设备待授权</h2>
             <p>设备指纹</p>
             <code>{deviceId}</code>
-            <button className="primary-button login-submit" onClick={onAuthorize}>授权当前设备并进入</button>
-            <span>正式上线时应改为管理员在服务端审批设备。</span>
+            <label className="approval-field">
+              <span>设备授权码</span>
+              <input
+                type="password"
+                value={approvalCode}
+                onChange={(event) => setApprovalCode(event.target.value)}
+                placeholder="请输入管理员授权码"
+              />
+            </label>
+            {message && <div className="login-error">{message}</div>}
+            <button className="primary-button login-submit" onClick={submitDeviceApproval}>授权当前设备并进入</button>
+            <span>授权码由管理员保管；后端验证通过后才会签发已授权会话。</span>
           </div>
         )}
       </section>

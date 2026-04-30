@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:worker": "npm run build && npx wrangler dev",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "hash-secret": "node scripts/hash-secret.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.4",
