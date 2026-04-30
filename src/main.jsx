@@ -27,6 +27,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Send,
   Settings,
   ShieldCheck,
   ShoppingCart,
@@ -78,7 +79,7 @@ const initialProducts = [
     vpsPassword: 'Vps@2024#',
     remark: '',
     costs: [
-      { id: 1, label: '服务器费', amount: 210.45, remark: '' },
+      { id: 1, label: '账号成本', amount: 210.45, remark: '' },
       { id: 2, label: 'VPS', amount: 30.2, remark: '' },
       { id: 3, label: 'ESIM', amount: 13.1, remark: '' },
       { id: 4, label: '写卡器', amount: 2, remark: '' },
@@ -106,7 +107,7 @@ const initialProducts = [
     vpsUsername: 'administrator',
     vpsPassword: 'VpS-demo-18',
     remark: '已交付资料',
-    costs: [{ id: 1, label: '服务器费', amount: 220, remark: '' }],
+    costs: [{ id: 1, label: '账号成本', amount: 220, remark: '' }],
     salePrice: 500,
     saleTime: '2024-04-26 16:00',
     isSold: true,
@@ -153,7 +154,7 @@ const initialProducts = [
     vpsUsername: 'root',
     vpsPassword: 'alpha-vps',
     remark: '',
-    costs: [{ id: 1, label: '服务器费', amount: 198.75, remark: '' }],
+    costs: [{ id: 1, label: '账号成本', amount: 198.75, remark: '' }],
     salePrice: 400,
     saleTime: '2024-04-25 17:21',
     isSold: true,
@@ -199,7 +200,7 @@ const initialProducts = [
     vpsUsername: 'root',
     vpsPassword: 'beta-vps',
     remark: '',
-    costs: [{ id: 1, label: '服务器费', amount: 230, remark: '' }],
+    costs: [{ id: 1, label: '账号成本', amount: 230, remark: '' }],
     salePrice: 500,
     saleTime: '2024-04-24 22:30',
     isSold: true,
@@ -256,23 +257,49 @@ const initialProducts = [
 ];
 
 const businessTrend = [
-  { date: '04-21', sales: 52000, profit: 16000 },
-  { date: '04-22', sales: 128000, profit: 31000 },
-  { date: '04-23', sales: 162000, profit: 28000 },
-  { date: '04-24', sales: 210000, profit: 56000 },
-  { date: '04-25', sales: 238000, profit: 72000 },
-  { date: '04-26', sales: 205000, profit: 48000 },
-  { date: '04-27', sales: 226000, profit: 64000 }
+  { date: '04-21', sales: 7600, profit: 2340 },
+  { date: '04-22', sales: 18710, profit: 4530 },
+  { date: '04-23', sales: 23680, profit: 4090 },
+  { date: '04-24', sales: 30700, profit: 8190 },
+  { date: '04-25', sales: 34795, profit: 10525 },
+  { date: '04-26', sales: 29970, profit: 7020 },
+  { date: '04-27', sales: 33040, profit: 9355 }
 ];
 
-const monthBars = [
-  { month: '11月', cost: 82000, profit: 68000 },
-  { month: '12月', cost: 94000, profit: 78000 },
-  { month: '1月', cost: 91000, profit: 72000 },
-  { month: '2月', cost: 112000, profit: 84000 },
-  { month: '3月', cost: 103000, profit: 86000 },
-  { month: '4月', cost: 73450, profit: 98540 }
+const businessTrend30 = [
+  { date: '03-29', sales: 11200, profit: 2740 },
+  { date: '03-31', sales: 13600, profit: 3220 },
+  { date: '04-02', sales: 15800, profit: 4100 },
+  { date: '04-04', sales: 14100, profit: 3680 },
+  { date: '04-06', sales: 18200, profit: 5240 },
+  { date: '04-08', sales: 20500, profit: 6110 },
+  { date: '04-10', sales: 22400, profit: 6490 },
+  { date: '04-12', sales: 21100, profit: 5900 },
+  { date: '04-14', sales: 24700, profit: 7020 },
+  { date: '04-16', sales: 26300, profit: 7650 },
+  { date: '04-18', sales: 28600, profit: 8240 },
+  { date: '04-20', sales: 30100, profit: 8850 },
+  { date: '04-22', sales: 31800, profit: 9410 },
+  { date: '04-24', sales: 34200, profit: 10120 },
+  { date: '04-27', sales: 33040, profit: 9355 }
 ];
+
+const customTrend = businessTrend.slice(2, 6);
+
+const monthBars = [
+  { month: '11月', cost: 11990, profit: 9940 },
+  { month: '12月', cost: 13740, profit: 11400 },
+  { month: '1月', cost: 13305, profit: 10525 },
+  { month: '2月', cost: 16375, profit: 12280 },
+  { month: '3月', cost: 15060, profit: 12575 },
+  { month: '4月', cost: 10738, profit: 14406 }
+];
+
+const chartLabels = {
+  sales: '销售额',
+  cost: '成本',
+  profit: '利润'
+};
 
 function money(value, currency = '$') {
   const number = Number(value || 0);
@@ -280,6 +307,16 @@ function money(value, currency = '$') {
     minimumFractionDigits: number % 1 ? 2 : 0,
     maximumFractionDigits: 2
   })}`;
+}
+
+function cny(value) {
+  return money(value, '¥');
+}
+
+function formatExchangeValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '';
+  return Number(number.toFixed(2)).toString();
 }
 
 function sumCosts(product) {
@@ -296,6 +333,21 @@ function productStatus(product) {
   if (!product.isPaid) return '待回款';
   if (product.settlementStatus === 'unsettled') return '待结算';
   return '已结算';
+}
+
+function productDateValue(product) {
+  return String(product.createdAt || '').slice(0, 10);
+}
+
+function downloadCsv(filename, rows) {
+  const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(',')).join('\n');
+  const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function statusClass(status) {
@@ -337,6 +389,37 @@ function App() {
   const setPage = (nextPage) => {
     setPageState(nextPage);
     window.history.replaceState(null, '', `#/${nextPage}`);
+  };
+
+  const addProduct = () => {
+    const now = new Date();
+    const nextId = Math.max(...products.map((item) => item.id), 0) + 1;
+    const nextProduct = {
+      id: nextId,
+      createdAt: now.toISOString().slice(0, 16).replace('T', ' '),
+      account: `new_product_${nextId}`,
+      email: '',
+      phoneCode: '+86',
+      phone: '',
+      password: '',
+      googleAuth: '',
+      securityCode: '',
+      vpsIp: '',
+      vpsRemoteUrl: '',
+      vpsUsername: '',
+      vpsPassword: '',
+      remark: '',
+      costs: [],
+      salePrice: 0,
+      saleTime: '',
+      isSold: false,
+      isPaid: false,
+      settlementStatus: 'unsettled',
+      updatedAt: now.toLocaleTimeString('zh-CN', { hour12: false })
+    };
+    setProducts((current) => [nextProduct, ...current]);
+    setActiveId(nextId);
+    setPage('workbench');
   };
 
   const updateProduct = (id, patch) => {
@@ -411,11 +494,12 @@ function App() {
     <div className="app">
       <Sidebar current={page} onChange={setPage} />
       <main className="main">
-        <Topbar id={activeProduct.id} user={currentUser} onLogout={logout} />
-        {page === 'dashboard' && <Dashboard products={products} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
+        <Topbar user={currentUser} onLogout={logout} />
+        {page === 'dashboard' && <Dashboard products={products} onOpenProducts={() => setPage('products')} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
         {page === 'products' && (
           <ProductsPage
             products={products}
+            onAddProduct={addProduct}
             onOpenWorkbench={(id) => {
               setActiveId(id);
               setPage('workbench');
@@ -464,7 +548,7 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
     <main className="login-page">
       <section className="login-card">
         <div className="login-brand">
-          <div className="google-mark"><span>G</span></div>
+          <img className="brand-logo" src="/google-logo.svg" alt="Google" />
           <div>
             <strong>GPC管理</strong>
             <p>轻量产品管理平台</p>
@@ -492,7 +576,6 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
             </label>
             {message && <div className="login-error">{message}</div>}
             <button className="primary-button login-submit" type="submit"><Lock size={16} /> 登录后台</button>
-            <div className="login-demo">超级管理员直接进入；伙伴管理员登录后需等待超级管理员批准</div>
           </form>
         ) : (
           <div className="device-card">
@@ -524,7 +607,7 @@ function Sidebar({ current, onChange }) {
   return (
     <aside className="sidebar">
       <div className="brand">
-        <div className="google-mark"><span>G</span></div>
+        <img className="brand-logo" src="/google-logo.svg" alt="Google" />
         <div>
           <strong>GPC管理</strong>
           <p>轻量产品管理平台</p>
@@ -546,25 +629,15 @@ function Sidebar({ current, onChange }) {
           );
         })}
       </nav>
-      <div className="sidebar-card">
-        <div className="mini-chart">
-          <span></span><span></span><span></span><span></span>
-          <i></i>
-        </div>
-        <strong>轻量、高效、清晰</strong>
-        <p>专为 2 人团队打造的产品管理工具 ✨</p>
-      </div>
     </aside>
   );
 }
 
-function Topbar({ id, user, onLogout }) {
+function Topbar({ user, onLogout }) {
   const roleLabel = user?.role === 'super_admin' ? '超级管理员' : '伙伴管理员';
   return (
     <header className="topbar">
       <div className="topbar-spacer" />
-      <div className="pill">系统ID：{id}<Info size={14} /></div>
-      <div className="data-time"><RefreshCw size={15} /> 数据更新：10:30:45</div>
       <div className="avatar">{user?.username?.slice(0, 1)?.toUpperCase() || 'A'}</div>
       <div className="admin">{user?.username || 'Admin'}<span>{roleLabel}</span></div>
       <button className="logout-button" onClick={onLogout}>退出</button>
@@ -572,7 +645,8 @@ function Topbar({ id, user, onLogout }) {
   );
 }
 
-function Dashboard({ products, onOpenWorkbench }) {
+function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
+  const [trendRange, setTrendRange] = useState('7d');
   const total = products.length;
   const sold = products.filter((item) => item.isSold).length;
   const totalProfit = products.filter((item) => item.isSold).reduce((sum, item) => sum + productProfit(item), 0);
@@ -586,6 +660,14 @@ function Dashboard({ products, onOpenWorkbench }) {
     { name: '已售', value: products.filter((item) => item.isSold).length, color: '#26c281' },
     { name: '已下架', value: 1, color: '#8290a8' }
   ];
+  const activeTrend = trendRange === '30d' ? businessTrend30 : trendRange === 'custom' ? customTrend : businessTrend;
+  const trendLabel = trendRange === '30d' ? '近 30 天' : trendRange === 'custom' ? '自定义区间' : '近 7 天';
+  const trendPeak = Math.max(...activeTrend.map((item) => item.profit));
+  const trendPeakDate = activeTrend.find((item) => item.profit === trendPeak)?.date;
+  const downloadTrend = () => downloadCsv('gpc-business-trend.csv', [
+    ['日期', '销售额', '利润'],
+    ...activeTrend.map((item) => [item.date, item.sales, item.profit])
+  ]);
 
   return (
     <section className="page">
@@ -593,16 +675,20 @@ function Dashboard({ products, onOpenWorkbench }) {
       <div className="kpi-grid six">
         <Kpi icon={WalletCards} label="累计产品" value="248 件" sub="较上月 +18　7.83%" tone="purple" />
         <Kpi icon={ShoppingCart} label="累计售出" value="12,865 件" sub="较上月 +1,236　10.61%" tone="blue" />
-        <Kpi icon={Coins} label="累计利润" value="¥ 1,258,290" sub="较上月 +98,765　8.52%" tone="orange" />
-        <Kpi icon={TrendingUp} label="本月利润" value="¥ 96,540" sub="较上月 +12,540　14.91%" tone="green" />
-        <Kpi icon={Database} label="待回款" value="¥ 216,800" sub="较上月 -8,600　3.82%" tone="orange" negative />
-        <Kpi icon={CreditCard} label="待结算" value="¥ 342,150" sub="较上月 +21,150　6.58%" tone="purple" />
+        <Kpi icon={Coins} label="累计利润" value="$183,960" sub="较上月 +14,440　8.52%" tone="orange" />
+        <Kpi icon={TrendingUp} label="本月利润" value="$14,406" sub="较上月 +1,870　14.91%" tone="green" />
+        <Kpi icon={Database} label="待回款" value={money(pendingPayment)} sub="较上月 -1,260　3.82%" tone="orange" negative />
+        <Kpi icon={CreditCard} label="待结算" value={money(pendingSettlement)} sub="较上月 +3,092　6.58%" tone="purple" />
       </div>
 
       <div className="dashboard-grid">
-        <Panel className="overview-panel" title="经营总览" hint="单位：人民币（元）" action={<ChartTabs />}>
+        <Panel className="overview-panel" title="经营总览" hint="单位：USD" action={<ChartTabs active={trendRange} onChange={setTrendRange} onDownload={downloadTrend} />}>
+          <ChartLegend items={[
+            { label: '销售额', color: '#7a5cf8' },
+            { label: '利润', color: '#4f9ff8' }
+          ]} />
           <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={businessTrend} margin={{ left: -20, right: 10, top: 20, bottom: 0 }}>
+            <AreaChart data={activeTrend} margin={{ left: 6, right: 10, top: 12, bottom: 0 }}>
               <defs>
                 <linearGradient id="salesGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#7a5cf8" stopOpacity={0.22} />
@@ -612,20 +698,23 @@ function Dashboard({ products, onOpenWorkbench }) {
               <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fill: '#9aa4b6', fontSize: 11 }} />
               <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9aa4b6', fontSize: 11 }} />
               <Tooltip content={<BusinessTooltip />} />
-              <Area isAnimationActive={false} type="monotone" dataKey="sales" stroke="#7a5cf8" strokeWidth={2.5} fill="url(#salesGradient)" />
-              <Area isAnimationActive={false} type="monotone" dataKey="profit" stroke="#4f9ff8" strokeWidth={2.5} fill="transparent" />
+              <Area isAnimationActive={false} type="monotone" dataKey="sales" name="销售额" stroke="#7a5cf8" strokeWidth={2.5} fill="url(#salesGradient)" />
+              <Area isAnimationActive={false} type="monotone" dataKey="profit" name="利润" stroke="#4f9ff8" strokeWidth={2.5} fill="transparent" />
             </AreaChart>
           </ResponsiveContainer>
+          <ChartInsight tone="blue">{trendLabel}利润峰值 {money(trendPeak)}，出现在 {trendPeakDate}。</ChartInsight>
         </Panel>
 
         <Panel title="产品状态分布" className="status-panel">
           <div className="donut-wrap">
-            <PieChart width={180} height={180}>
+            <div className="donut-chart-box">
+              <PieChart width={190} height={190}>
                 <Pie isAnimationActive={false} data={pie} innerRadius={58} outerRadius={78} dataKey="value" strokeWidth={0}>
                   {pie.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
                 </Pie>
-            </PieChart>
-            <div className="donut-center"><span>总数</span><strong>248</strong></div>
+              </PieChart>
+              <div className="donut-center"><span>总数</span><strong>248</strong></div>
+            </div>
             <div className="legend">
               {pie.map((entry, index) => (
                 <div key={entry.name}><i style={{ background: entry.color }} />{entry.name}<b>{index === 0 ? 156 : index === 1 ? 78 : 14}</b></div>
@@ -634,28 +723,33 @@ function Dashboard({ products, onOpenWorkbench }) {
           </div>
         </Panel>
 
-        <Panel title="关键提醒" action={<button className="link-button">查看全部 <ChevronRight size={14} /></button>}>
+        <Panel title="关键提醒" action={<button className="link-button" onClick={onOpenProducts}>查看全部 <ChevronRight size={14} /></button>}>
           <div className="alerts">
-            <AlertRow icon={AlertTriangle} label="未回款" value={money(pendingPayment, '¥ ')} sub="共 5 笔　较上月 ↓3 笔" tone="red" />
-            <AlertRow icon={ShieldCheck} label="未结算" value={money(pendingSettlement * exchangeRate, '¥ ')} sub="共 7 笔　较上月 ↓2 笔" tone="orange" />
-            <AlertRow icon={UserRound} label="待补成本" value="¥ 28,600" sub="共 3 个产品　较上月 ↓1 个" tone="purple" />
+            <AlertRow icon={AlertTriangle} label="未回款" value={money(pendingPayment)} sub="共 5 笔　较上月 ↓3 笔" tone="red" />
+            <AlertRow icon={ShieldCheck} label="未结算" value={money(pendingSettlement)} sub="共 7 笔　较上月 ↓2 笔" tone="orange" />
+            <AlertRow icon={UserRound} label="待补成本" value="$4,180" sub="共 3 个产品　较上月 ↓1 个" tone="purple" />
           </div>
         </Panel>
       </div>
 
       <div className="bottom-grid">
-        <Panel title="月度成本与利润对比" hint="单位：人民币（元）">
+        <Panel title="月度成本与利润对比" hint="单位：USD">
+          <ChartLegend items={[
+            { label: '成本', color: '#4f9ff8' },
+            { label: '利润', color: '#8f63f7' }
+          ]} />
           <ResponsiveContainer width="100%" height={218}>
-            <BarChart data={monthBars} margin={{ left: -20, right: 10, top: 20, bottom: 0 }}>
+            <BarChart data={monthBars} margin={{ left: 6, right: 10, top: 12, bottom: 0 }}>
               <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#9aa4b6', fontSize: 11 }} />
               <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9aa4b6', fontSize: 11 }} />
-              <Tooltip />
-              <Bar isAnimationActive={false} dataKey="cost" fill="#4f9ff8" radius={[6, 6, 0, 0]} />
-              <Bar isAnimationActive={false} dataKey="profit" fill="#8f63f7" radius={[6, 6, 0, 0]} />
+              <Tooltip content={<BarTooltip />} />
+              <Bar isAnimationActive={false} dataKey="cost" name="成本" fill="#4f9ff8" radius={[6, 6, 0, 0]} />
+              <Bar isAnimationActive={false} dataKey="profit" name="利润" fill="#8f63f7" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          <ChartInsight tone="purple">4 月利润 $14,406，高于成本 $10,738；利润率约 57.3%。</ChartInsight>
         </Panel>
-        <Panel title="最近产品记录" action={<button className="link-button">查看全部 <ChevronRight size={14} /></button>}>
+        <Panel title="最近产品记录" action={<button className="link-button" onClick={onOpenProducts}>查看全部 <ChevronRight size={14} /></button>}>
           <table className="mini-table">
             <thead><tr><th>ID</th><th>账号</th><th>状态</th><th>利润 (USD)</th><th>时间</th></tr></thead>
             <tbody>
@@ -690,13 +784,26 @@ function Kpi({ icon: Icon, label, value, sub, tone, negative }) {
   );
 }
 
-function ChartTabs() {
+function ChartTabs({ active, onChange, onDownload }) {
   return (
     <div className="chart-tabs">
-      <button className="active">近7天</button>
-      <button>近30天</button>
-      <button>自定义</button>
-      <Download size={15} />
+      <button className={active === '7d' ? 'active' : ''} onClick={() => onChange('7d')}>近7天</button>
+      <button className={active === '30d' ? 'active' : ''} onClick={() => onChange('30d')}>近30天</button>
+      <button className={active === 'custom' ? 'active' : ''} onClick={() => onChange('custom')}>自定义</button>
+      <button className="icon-button" aria-label="下载经营数据" onClick={onDownload}><Download size={15} /></button>
+    </div>
+  );
+}
+
+function ChartLegend({ items }) {
+  return (
+    <div className="chart-legend" aria-hidden="true">
+      {items.map((item) => (
+        <span key={item.label}>
+          <i style={{ background: item.color }} />
+          {item.label}
+        </span>
+      ))}
     </div>
   );
 }
@@ -706,10 +813,27 @@ function BusinessTooltip({ active, payload, label }) {
   return (
     <div className="chart-tooltip">
       <strong>{label}</strong>
-      <p><i className="purple-dot" />销售额　¥{payload[0].value.toLocaleString()}</p>
-      <p><i className="blue-dot" />利润　¥{payload[1].value.toLocaleString()}</p>
+      {payload.map((item) => (
+        <p key={item.dataKey}><i className={item.dataKey === 'profit' ? 'blue-dot' : 'purple-dot'} />{chartLabels[item.dataKey]}　{money(item.value)}</p>
+      ))}
     </div>
   );
+}
+
+function BarTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="chart-tooltip">
+      <strong>{label}</strong>
+      {payload.map((item) => (
+        <p key={item.dataKey}><i className={item.dataKey === 'cost' ? 'blue-dot' : 'purple-dot'} />{chartLabels[item.dataKey]}　{money(item.value)}</p>
+      ))}
+    </div>
+  );
+}
+
+function ChartInsight({ children, tone }) {
+  return <div className={`chart-insight ${tone}`}><Info size={14} />{children}</div>;
 }
 
 function AlertRow({ icon: Icon, label, value, sub, tone }) {
@@ -722,11 +846,15 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ products, onOpenWorkbench }) {
+function ProductsPage({ products, onOpenWorkbench, onAddProduct }) {
   const [keyword, setKeyword] = useState('');
   const [saleFilter, setSaleFilter] = useState('全部');
   const [paidFilter, setPaidFilter] = useState('全部');
   const [settlementFilter, setSettlementFilter] = useState('全部');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
@@ -735,9 +863,25 @@ function ProductsPage({ products, onOpenWorkbench }) {
       const matchesSale = saleFilter === '全部' || (saleFilter === '待售' ? !item.isSold : item.isSold);
       const matchesPaid = paidFilter === '全部' || (paidFilter === '未回款' ? !item.isPaid : item.isPaid);
       const matchesSettlement = settlementFilter === '全部' || (settlementFilter === '未结算' ? item.settlementStatus === 'unsettled' : item.settlementStatus === 'settled');
-      return matchesKeyword && matchesSale && matchesPaid && matchesSettlement;
+      const createdDate = productDateValue(item);
+      const matchesDateFrom = !dateFrom || createdDate >= dateFrom;
+      const matchesDateTo = !dateTo || createdDate <= dateTo;
+      return matchesKeyword && matchesSale && matchesPaid && matchesSettlement && matchesDateFrom && matchesDateTo;
     });
-  }, [products, keyword, saleFilter, paidFilter, settlementFilter]);
+  }, [products, keyword, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo]);
+  const pageCount = Math.max(1, Math.ceil(filteredProducts.length / pageSize));
+  const paginatedProducts = filteredProducts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [keyword, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo, pageSize]);
+  const resetFilters = () => {
+    setKeyword('');
+    setSaleFilter('全部');
+    setPaidFilter('全部');
+    setSettlementFilter('全部');
+    setDateFrom('');
+    setDateTo('');
+  };
 
   return (
     <section className="page products-page">
@@ -755,15 +899,34 @@ function ProductsPage({ products, onOpenWorkbench }) {
             <FilterSelect label="销售状态" value={saleFilter} onChange={setSaleFilter} options={['全部', '待售', '已售']} />
             <FilterSelect label="回款状态" value={paidFilter} onChange={setPaidFilter} options={['全部', '未回款', '已回款']} />
             <FilterSelect label="结算状态" value={settlementFilter} onChange={setSettlementFilter} options={['全部', '未结算', '已结算']} />
-            <div className="date-filter"><span>创建时间</span><button>开始日期　~　结束日期 <Calendar size={15} /></button></div>
-            <button className="secondary-button">重置</button>
-            <button className="primary-button"><Plus size={16} /> 新增产品</button>
+            <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
+            <button className="secondary-button" onClick={resetFilters}>重置</button>
+            <button className="primary-button" onClick={onAddProduct}><Plus size={16} /> 新增产品</button>
           </div>
-          <ProductTable products={filteredProducts} onOpenWorkbench={onOpenWorkbench} />
-          <div className="pagination">
-            <button>10 条/页</button><span>共 128 条</span>
-            <div className="pager"><ChevronLeft size={16} /><b>1</b><span>2</span><span>3</span><span>4</span><span>5</span><em>...</em><span>13</span><ChevronRight size={16} /></div>
-          </div>
+          {products.length === 0 ? (
+            <EmptyState icon={Box} title="暂无产品" text="先新增产品，再录入账号资料、成本、销售与结算信息。" />
+          ) : filteredProducts.length === 0 ? (
+            <EmptyState icon={Search} title="没有匹配结果" text="换一个关键词，或清空销售、回款、结算筛选条件。" />
+          ) : (
+            <>
+              <ProductTable products={paginatedProducts} onOpenWorkbench={onOpenWorkbench} />
+              <div className="pagination">
+                <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                  <option value={5}>5 条/页</option>
+                  <option value={10}>10 条/页</option>
+                  <option value={20}>20 条/页</option>
+                </select>
+                <span>共 {filteredProducts.length} 条</span>
+                <div className="pager">
+                  <button disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}><ChevronLeft size={16} /></button>
+                  {Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => (
+                    <button key={page} className={page === currentPage ? 'active' : ''} onClick={() => setCurrentPage(page)}>{page}</button>
+                  ))}
+                  <button disabled={currentPage === pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}><ChevronRight size={16} /></button>
+                </div>
+              </div>
+            </>
+          )}
         </Panel>
         <aside className="right-board">
           <MiniMetric icon={Box} label="今日新增" value="3" />
@@ -785,6 +948,20 @@ function FilterSelect({ label, value, onChange, options }) {
         {options.map((option) => <option key={option}>{option}</option>)}
       </select>
     </label>
+  );
+}
+
+function DateRangeFilter({ from, to, onFromChange, onToChange }) {
+  return (
+    <div className="date-filter">
+      <span>创建时间</span>
+      <div className="date-range">
+        <input aria-label="开始日期" type="date" value={from} max={to || undefined} onChange={(event) => onFromChange(event.target.value)} />
+        <b>~</b>
+        <input aria-label="结束日期" type="date" value={to} min={from || undefined} onChange={(event) => onToChange(event.target.value)} />
+        <Calendar size={15} />
+      </div>
+    </div>
   );
 }
 
@@ -811,7 +988,7 @@ function ProductTable({ products, onOpenWorkbench }) {
               <td><StatusBadge label={item.isSold ? '已售' : '待售'} /></td>
               <td>{item.isSold ? <StatusBadge label={item.isPaid ? '已回款' : '未回款'} /> : '-'}</td>
               <td><StatusBadge label={item.settlementStatus === 'settled' ? '已结算' : '未结算'} /></td>
-              <td className="actions"><button>查看</button><button>编辑</button><button onClick={() => onOpenWorkbench(item.id)}>工作台</button></td>
+              <td className="actions"><button onClick={() => onOpenWorkbench(item.id)}>查看</button><button onClick={() => onOpenWorkbench(item.id)}>编辑</button><button onClick={() => onOpenWorkbench(item.id)}>工作台</button></td>
             </tr>
           );
         })}
@@ -820,29 +997,112 @@ function ProductTable({ products, onOpenWorkbench }) {
   );
 }
 
+function EmptyState({ icon: Icon, title, text }) {
+  return (
+    <div className="empty-state">
+      <Icon size={30} />
+      <strong>{title}</strong>
+      <p>{text}</p>
+    </div>
+  );
+}
+
 function Workbench({ product, user, onChange }) {
   const [visible, setVisible] = useState({});
   const [costDraft, setCostDraft] = useState({ label: '', amount: '', remark: '' });
   const [showCostForm, setShowCostForm] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [fullView, setFullView] = useState(null);
   const totalCost = sumCosts(product);
   const profit = productProfit(product);
   const share = profit / 2;
   const canEditCredentials = user?.role === 'super_admin';
 
-  const updateField = (field, value) => onChange({ [field]: value });
+  const commitChange = (patch) => {
+    try {
+      onChange(patch);
+      return true;
+    } catch {
+      setNotice('数据保存失败，请稍后重试；当前页面未完成写入。');
+      return false;
+    }
+  };
+  const updateField = (field, value) => {
+    setNotice('');
+    commitChange({ [field]: value });
+  };
+  const updateSaleStatus = (checked) => {
+    if (checked && totalCost <= 0) {
+      setNotice('请先填写成本后再标记售出，避免利润和分成被误算。');
+      return;
+    }
+    updateField('isSold', checked);
+  };
+  const updatePaidStatus = (checked) => {
+    if (checked && !product.isSold) {
+      setNotice('请先标记售出，再登记回款。');
+      return;
+    }
+    updateField('isPaid', checked);
+  };
   const updateCost = (id, amount) => {
-    onChange({ costs: product.costs.map((item) => item.id === id ? { ...item, amount: Number(amount) } : item) });
+    setNotice('');
+    commitChange({ costs: product.costs.map((item) => item.id === id ? { ...item, amount: Number(amount) } : item) });
   };
   const addCost = () => {
     if (!costDraft.label || !costDraft.amount) return;
-    onChange({
+    const saved = commitChange({
       costs: [
         ...product.costs,
         { id: Date.now(), label: costDraft.label, amount: Number(costDraft.amount), remark: costDraft.remark }
       ]
     });
+    if (!saved) return;
     setCostDraft({ label: '', amount: '', remark: '' });
     setShowCostForm(false);
+  };
+  const settleProduct = () => {
+    if (totalCost <= 0) {
+      setNotice('请先填写成本后再结算。');
+      return;
+    }
+    if (!product.isPaid) {
+      setNotice('未回款产品暂不允许结算，请先确认回款状态。');
+      return;
+    }
+    if (commitChange({ settlementStatus: 'settled', settledAt: '2024-04-27 18:30' })) {
+      setNotice('已标记结算，利润分成按 USD 记录，右侧同步显示 CNY 换算。');
+    }
+  };
+  const pushToTelegram = async () => {
+    setNotice('正在推送到 Telegram...');
+    try {
+      const response = await fetch('/api/telegram/push', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          account: product.account,
+          password: product.password,
+          phoneCode: product.phoneCode,
+          phone: product.phone,
+          email: product.email,
+          securityCode: product.securityCode,
+          vpsRemoteUrl: product.vpsRemoteUrl
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setNotice(data.message || 'Telegram 推送失败，请稍后重试。');
+        return;
+      }
+      setNotice('已推送到关联的 Telegram Bot。');
+    } catch {
+      setNotice('Telegram 推送失败，请检查网络或后端配置。');
+    }
+  };
+  const openFullValue = (label, value) => {
+    setFullView({ label, value: String(value || '') });
   };
 
   return (
@@ -861,21 +1121,27 @@ function Workbench({ product, user, onChange }) {
       </div>
       <div className="workbench-grid">
         <div className="workbench-main">
-          <Section title="基础信息" icon={FileText} subtitle="填写产品基础信息，为后续流程提供准备">
-            {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、Google 验证、安全码、VPS 密码仅超级管理员可修改。</div>}
+          {notice && <div className="inline-notice"><Info size={15} />{notice}</div>}
+          <Section
+            title="基础信息"
+            icon={FileText}
+            subtitle="填写产品基础信息，为后续流程提供准备"
+            action={<button className="telegram-push" type="button" onClick={pushToTelegram}><Send size={15} />推送</button>}
+          >
+            {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、Google 验证、设备安全码、VPS 密码仅超级管理员可修改。</div>}
             <div className="form-grid">
               <Input label="创建时间" value={product.createdAt.split(' ')[0]} icon={Calendar} onChange={(value) => updateField('createdAt', `${value} ${product.createdAt.split(' ')[1] || '10:28'}`)} />
               <Input label="绑定邮箱" value={product.email} onChange={(value) => updateField('email', value)} />
               <PhoneInput product={product} onChange={onChange} />
               <Input label="账号" value={product.account} onChange={(value) => updateField('account', value)} />
               <SecretInput readOnly={!canEditCredentials} label="Google 验证" value={product.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="设备安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
               <Input label="VPS 用户名" value={product.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} />
-              <Input label="VPS IP" value={product.vpsIp} onChange={(value) => updateField('vpsIp', value)} />
-              <Input label="VPS 远程链接" value={product.vpsRemoteUrl} wide onChange={(value) => updateField('vpsRemoteUrl', value)} />
-              <Textarea label="备注" value={product.remark} onChange={(value) => updateField('remark', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} onOpenFull={openFullValue} />
+              <Input label="VPS IP" value={product.vpsIp} copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsIp', value)} />
+              <Input label="VPS 远程链接" value={product.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />
+              <Textarea label="备注" value={product.remark} copyable onOpenFull={openFullValue} onChange={(value) => updateField('remark', value)} />
             </div>
           </Section>
 
@@ -906,9 +1172,9 @@ function Workbench({ product, user, onChange }) {
             <div className="sale-grid">
               <Input label="售价（USD）" type="number" value={product.salePrice} onChange={(value) => updateField('salePrice', Number(value))} />
               <Input label="销售时间" value={product.saleTime || '2024-04-27 10:28'} icon={Calendar} onChange={(value) => updateField('saleTime', value)} />
-              <Toggle label="是否售出" checked={product.isSold} onChange={(checked) => updateField('isSold', checked)} />
-              <Toggle label="是否回款" checked={product.isPaid} onChange={(checked) => updateField('isPaid', checked)} />
-              <Textarea label="备注" value={product.saleRemark || ''} onChange={(value) => updateField('saleRemark', value)} />
+              <Toggle label="是否售出" checked={product.isSold} onChange={updateSaleStatus} />
+              <Toggle label="是否回款" checked={product.isPaid} onChange={updatePaidStatus} />
+              <Textarea label="备注" value={product.saleRemark || ''} copyable onOpenFull={openFullValue} onChange={(value) => updateField('saleRemark', value)} />
             </div>
           </Section>
 
@@ -922,13 +1188,30 @@ function Workbench({ product, user, onChange }) {
             </div>
           </Section>
         </div>
-        <ProfitPreview product={product} totalCost={totalCost} profit={profit} share={share} onSettle={() => onChange({ settlementStatus: 'settled', settledAt: '2024-04-27 18:30' })} />
+        <ProfitPreview product={product} totalCost={totalCost} profit={profit} share={share} onSettle={settleProduct} />
       </div>
+      {fullView && <FullValueModal label={fullView.label} value={fullView.value} onClose={() => setFullView(null)} />}
     </section>
   );
 }
 
 function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
+  const rateAvailable = Number.isFinite(exchangeRate) && exchangeRate > 0;
+  const [usdAmount, setUsdAmount] = useState('');
+  const [cnyAmount, setCnyAmount] = useState('');
+
+  const updateUsdAmount = (value) => {
+    setUsdAmount(value);
+    const number = Number(value);
+    setCnyAmount(value === '' || !Number.isFinite(number) ? '' : formatExchangeValue(number * exchangeRate));
+  };
+
+  const updateCnyAmount = (value) => {
+    setCnyAmount(value);
+    const number = Number(value);
+    setUsdAmount(value === '' || !Number.isFinite(number) ? '' : formatExchangeValue(number / exchangeRate));
+  };
+
   return (
     <aside className="profit-preview">
       <Panel title="实时利润预览">
@@ -939,17 +1222,35 @@ function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
         <PreviewLine icon={ShieldCheck} label="武汉分成（50%）" value={money(share)} />
       </Panel>
       <Panel className="rate-card">
-        <div className="rate-title">Google 实时汇率 <RefreshCw size={14} /></div>
-        <p>1 USD = 6.84 CNY <b>6.84 <span>CNY</span></b></p>
+        <div className="rate-title">USD / CNY 换算 <RefreshCw size={14} /></div>
+        {rateAvailable ? (
+          <>
+            <p>1 USD = {exchangeRate.toFixed(2)} CNY <b>{exchangeRate.toFixed(2)} <span>CNY</span></b></p>
+            <div className="exchange-converter">
+              <label>
+                <span>USD</span>
+                <input type="number" min="0" value={usdAmount} onChange={(event) => updateUsdAmount(event.target.value)} placeholder="输入 USD" />
+              </label>
+              <label>
+                <span>CNY</span>
+                <input type="number" min="0" value={cnyAmount} onChange={(event) => updateCnyAmount(event.target.value)} placeholder="输入 CNY" />
+              </label>
+            </div>
+          </>
+        ) : (
+          <div className="rate-error"><AlertTriangle size={15} />汇率获取失败，CNY 换算暂不可用。</div>
+        )}
       </Panel>
       <Panel className="rmb-card">
-        <PreviewLine icon={ShieldCheck} label="香港折合人民币" value={money(share * exchangeRate, '¥')} />
-        <PreviewLine icon={ShieldCheck} label="武汉折合人民币" value={money(share * exchangeRate, '¥')} />
+        <div className="currency-note">左侧经营金额以 USD 记录；本模块仅用于分成折合 CNY。</div>
+        <PreviewLine icon={ShieldCheck} label="香港分成折合 CNY" value={rateAvailable ? cny(share * exchangeRate) : '-'} />
+        <PreviewLine icon={ShieldCheck} label="武汉分成折合 CNY" value={rateAvailable ? cny(share * exchangeRate) : '-'} />
       </Panel>
       <Panel className="settlement-status">
         <div className="status-head"><strong>结算状态</strong><StatusBadge label={product.settlementStatus === 'settled' ? '已结算' : '未结算'} /></div>
         <p>香港与武汉利润分成结算状态</p>
-        <div className="check-list"><span className="ok"></span>已录入：成本与收款信息</div>
+        <div className="check-list"><span className={totalCost > 0 ? 'ok' : 'bad'}></span>{totalCost > 0 ? '已录入：成本信息' : '待处理：未填写成本'}</div>
+        <div className="check-list"><span className={product.isPaid ? 'ok' : 'bad'}></span>{product.isPaid ? '已确认：回款完成' : '待处理：未回款不允许结算'}</div>
         <div className="check-list"><span className="bad"></span>{product.settlementStatus === 'settled' ? `已结算：${product.settledAt} Admin` : '未结算：尚未完成结算'}</div>
         {product.settlementStatus !== 'settled' && <button className="primary-button full" onClick={onSettle}>标记为已结算</button>}
       </Panel>
@@ -958,36 +1259,39 @@ function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
   );
 }
 
-function Section({ title, subtitle, icon: Icon, children }) {
+function Section({ title, subtitle, icon: Icon, action, children }) {
   return (
     <section className="form-section">
-      <div className="section-title"><Icon size={18} /><strong>{title}</strong><span>{subtitle}</span></div>
+      <div className="section-title"><Icon size={18} /><strong>{title}</strong><span>{subtitle}</span>{action && <div className="section-action">{action}</div>}</div>
       {children}
     </section>
   );
 }
 
-function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabled = false }) {
+function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabled = false, copyable = false, onOpenFull }) {
+  const text = String(value ?? '');
   return (
     <label className={`input-label ${wide ? 'wide' : ''}`}>
       <span>{label}</span>
-      <div className="input-shell">
+      <div className="input-shell" onDoubleClick={() => onOpenFull?.(label, text)} title="双击查看完整内容">
         <input disabled={disabled} type={type} value={value ?? ''} onChange={(event) => onChange?.(event.target.value)} />
         {Icon && <Icon size={15} />}
+        {copyable && <CopyFieldButton value={text} disabled={disabled} />}
       </div>
     </label>
   );
 }
 
-function SecretInput({ label, value, visible, onToggle, onChange, disabled = false, readOnly = false }) {
+function SecretInput({ label, value, visible, onToggle, onChange, disabled = false, readOnly = false, onOpenFull }) {
   const canReveal = !disabled;
+  const text = String(value || '');
   return (
     <label className="input-label">
       <span>{label}</span>
-      <div className="input-shell">
+      <div className="input-shell" onDoubleClick={() => canReveal && onOpenFull?.(label, text)} title="双击查看完整内容">
         <input readOnly={readOnly} disabled={disabled} type={visible && canReveal ? 'text' : 'password'} value={disabled ? '********' : (value || '')} onChange={(event) => !readOnly && onChange(event.target.value)} />
-        <button disabled={!canReveal} type="button" onClick={onToggle}>{visible ? <EyeOff size={15} /> : <Eye size={15} />}</button>
-        <button disabled={!canReveal} type="button" onClick={() => navigator.clipboard?.writeText(value || '')}><Copy size={15} /></button>
+        <button disabled={!canReveal} type="button" onClick={(event) => { event.stopPropagation(); onToggle(); }}>{visible ? <EyeOff size={15} /> : <Eye size={15} />}</button>
+        <CopyFieldButton value={text} disabled={!canReveal} />
       </div>
     </label>
   );
@@ -1007,13 +1311,52 @@ function PhoneInput({ product, onChange, disabled = false }) {
   );
 }
 
-function Textarea({ label, value, onChange, disabled = false }) {
+function Textarea({ label, value, onChange, disabled = false, copyable = false, onOpenFull }) {
+  const text = String(value || '');
   return (
     <label className="input-label wide">
       <span>{label}</span>
-      <textarea disabled={disabled} value={value || ''} maxLength={200} placeholder="请输入备注信息（可选）" onChange={(event) => onChange(event.target.value)} />
-      <em>{(value || '').length} / 200</em>
+      <div className="textarea-shell" onDoubleClick={() => onOpenFull?.(label, text)} title="双击查看完整内容">
+        <textarea disabled={disabled} value={value || ''} maxLength={200} placeholder="请输入备注信息（可选）" onChange={(event) => onChange(event.target.value)} />
+        <em>{(value || '').length} / 200</em>
+        {copyable && <CopyFieldButton value={text} disabled={disabled} />}
+      </div>
     </label>
+  );
+}
+
+function CopyFieldButton({ value, disabled = false }) {
+  const [copied, setCopied] = useState(false);
+  const copyValue = async (event) => {
+    event.stopPropagation();
+    if (disabled) return;
+    try {
+      await navigator.clipboard?.writeText(value || '');
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <button className="copy-field-button" disabled={disabled} type="button" onClick={copyValue} aria-label="复制">
+      <Copy size={15} />
+      {copied && <em className="copy-feedback">已复制</em>}
+    </button>
+  );
+}
+
+function FullValueModal({ label, value, onClose }) {
+  return (
+    <div className="value-modal-backdrop" onClick={onClose}>
+      <section className="value-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="value-modal-head">
+          <strong>{label}</strong>
+          <button type="button" onClick={onClose}><X size={16} /></button>
+        </div>
+        <textarea readOnly value={value || '暂无内容'} />
+      </section>
+    </div>
   );
 }
 

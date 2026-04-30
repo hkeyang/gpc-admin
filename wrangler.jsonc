@@ -8,6 +8,13 @@
     "directory": "./dist",
     "not_found_handling": "single-page-application"
   },
+  "routes": [
+    {
+      "pattern": "youxi.aisea.space",
+      "zone_name": "aisea.space",
+      "custom_domain": true
+    }
+  ],
   "durable_objects": {
     "bindings": [
       {
