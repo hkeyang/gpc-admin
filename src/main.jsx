@@ -827,7 +827,7 @@ function Workbench({ product, user, onChange }) {
   const totalCost = sumCosts(product);
   const profit = productProfit(product);
   const share = profit / 2;
-  const canManageCredentials = user?.role === 'super_admin';
+  const canEditCredentials = user?.role === 'super_admin';
 
   const updateField = (field, value) => onChange({ [field]: value });
   const updateCost = (id, amount) => {
@@ -862,17 +862,17 @@ function Workbench({ product, user, onChange }) {
       <div className="workbench-grid">
         <div className="workbench-main">
           <Section title="基础信息" icon={FileText} subtitle="填写产品基础信息，为后续流程提供准备">
-            {!canManageCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可维护业务资料；账号密码、Google 验证、安全码、VPS 密码仅超级管理员可查看和修改。</div>}
+            {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、Google 验证、安全码、VPS 密码仅超级管理员可修改。</div>}
             <div className="form-grid">
               <Input label="创建时间" value={product.createdAt.split(' ')[0]} icon={Calendar} onChange={(value) => updateField('createdAt', `${value} ${product.createdAt.split(' ')[1] || '10:28'}`)} />
               <Input label="绑定邮箱" value={product.email} onChange={(value) => updateField('email', value)} />
               <PhoneInput product={product} onChange={onChange} />
               <Input label="账号" value={product.account} onChange={(value) => updateField('account', value)} />
-              <SecretInput disabled={!canManageCredentials} label="Google 验证" value={product.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
-              <SecretInput disabled={!canManageCredentials} label="安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
-              <SecretInput disabled={!canManageCredentials} label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="Google 验证" value={product.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="安全码" value={product.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="密码" value={product.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} />
               <Input label="VPS 用户名" value={product.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
-              <SecretInput disabled={!canManageCredentials} label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="VPS 密码" value={product.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} />
               <Input label="VPS IP" value={product.vpsIp} onChange={(value) => updateField('vpsIp', value)} />
               <Input label="VPS 远程链接" value={product.vpsRemoteUrl} wide onChange={(value) => updateField('vpsRemoteUrl', value)} />
               <Textarea label="备注" value={product.remark} onChange={(value) => updateField('remark', value)} />
@@ -979,13 +979,13 @@ function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabl
   );
 }
 
-function SecretInput({ label, value, visible, onToggle, onChange, disabled = false }) {
+function SecretInput({ label, value, visible, onToggle, onChange, disabled = false, readOnly = false }) {
   const canReveal = !disabled;
   return (
     <label className="input-label">
       <span>{label}</span>
       <div className="input-shell">
-        <input disabled={disabled} type={visible && canReveal ? 'text' : 'password'} value={disabled ? '********' : (value || '')} onChange={(event) => onChange(event.target.value)} />
+        <input readOnly={readOnly} disabled={disabled} type={visible && canReveal ? 'text' : 'password'} value={disabled ? '********' : (value || '')} onChange={(event) => !readOnly && onChange(event.target.value)} />
         <button disabled={!canReveal} type="button" onClick={onToggle}>{visible ? <EyeOff size={15} /> : <Eye size={15} />}</button>
         <button disabled={!canReveal} type="button" onClick={() => navigator.clipboard?.writeText(value || '')}><Copy size={15} /></button>
       </div>
@@ -1113,13 +1113,13 @@ function SettingsPage({ user }) {
           <div className="settings-placeholder">
             <Lock size={34} />
             <h2>权限受限</h2>
-            <p>合作伙伴管理员权限接近超级管理员，但不能管理后台账号、审批登录或查看/修改敏感凭据。</p>
+            <p>合作伙伴管理员权限接近超级管理员，但不能管理后台账号、审批登录或修改敏感凭据。</p>
           </div>
         ) : (
           <div className="settings-admin-grid">
             <section className="settings-block">
               <h3>生成伙伴管理员账号</h3>
-              <p>伙伴管理员登录后需要你在这里同意；进入后可维护业务数据，但不能管理后台账号或查看/修改敏感凭据。</p>
+              <p>伙伴管理员登录后需要你在这里同意；进入后可查看全部产品资料并维护业务数据，但不能管理后台账号或修改敏感凭据。</p>
               <div className="settings-form">
                 <Input label="账号" value={accountDraft.username} onChange={(value) => setAccountDraft({ ...accountDraft, username: value })} />
                 <Input label="初始密码" type="password" value={accountDraft.password} onChange={(value) => setAccountDraft({ ...accountDraft, password: value })} />
