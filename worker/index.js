@@ -557,7 +557,19 @@ function sanitizeProduct(input, id) {
     settlementExchangeRate: positiveNumberOrNull(input.settlementExchangeRate),
     settlementShareCnyHongKong: nullableNumber(input.settlementShareCnyHongKong),
     settlementShareCnyWuhan: nullableNumber(input.settlementShareCnyWuhan),
+    settlementHongKongCostUsd: nullableNumber(input.settlementHongKongCostUsd),
+    settlementWuhanCostUsd: nullableNumber(input.settlementWuhanCostUsd),
+    settlementProfitUsd: nullableNumber(input.settlementProfitUsd),
+    settlementHongKongReceivableUsd: nullableNumber(input.settlementHongKongReceivableUsd),
+    settlementWuhanRetainedUsd: nullableNumber(input.settlementWuhanRetainedUsd),
+    settlementHongKongReceivableCny: nullableNumber(input.settlementHongKongReceivableCny),
+    settlementWuhanRetainedCny: nullableNumber(input.settlementWuhanRetainedCny),
     saleRemark: String(input.saleRemark || '').slice(0, 200),
+    accountType: input.accountType === 'enterprise' ? 'enterprise' : input.accountType === 'personal' ? 'personal' : '',
+    accountCreationDate: cleanLine(input.accountCreationDate),
+    accountCountry: cleanLine(input.accountCountry),
+    accountInfoRaw: String(input.accountInfoRaw || '').slice(0, 3000),
+    accountInfoFormatted: String(input.accountInfoFormatted || '').slice(0, 3000),
     updatedAt
   };
 }
@@ -595,7 +607,19 @@ function mergeDuplicateProduct(base, duplicate) {
     'settlementExchangeRate',
     'settlementShareCnyHongKong',
     'settlementShareCnyWuhan',
+    'settlementHongKongCostUsd',
+    'settlementWuhanCostUsd',
+    'settlementProfitUsd',
+    'settlementHongKongReceivableUsd',
+    'settlementWuhanRetainedUsd',
+    'settlementHongKongReceivableCny',
+    'settlementWuhanRetainedCny',
     'saleRemark',
+    'accountType',
+    'accountCreationDate',
+    'accountCountry',
+    'accountInfoRaw',
+    'accountInfoFormatted',
     'updatedAt'
   ];
 
@@ -636,6 +660,7 @@ function sanitizeCost(item, index) {
     id: normalizeProductId(item.id || Date.now() + index),
     label,
     amount: item.amount === '' ? '' : numberOrZero(item.amount),
+    owner: item.owner === 'wuhan' ? 'wuhan' : 'hongKong',
     remark: String(item.remark || '').slice(0, 120)
   };
 }
@@ -661,22 +686,63 @@ function positiveNumberOrNull(value) {
 }
 
 async function fetchUsdCnyRate() {
-  const response = await fetch('https://api.frankfurter.app/latest?from=USD&to=CNY', {
-    headers: { Accept: 'application/json' }
-  });
-  if (!response.ok) return json({ message: '汇率获取失败，请稍后重试' }, 502);
+  const candidates = await Promise.allSettled([
+    fetchFrankfurterRate(),
+    fetchOpenExchangeRate()
+  ]);
+  const rates = candidates
+    .filter((candidate) => candidate.status === 'fulfilled' && candidate.value)
+    .map((candidate) => candidate.value)
+    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
 
+  if (!rates.length) return json({ message: '汇率获取失败，请稍后重试' }, 502);
+  return json(rates[0]);
+}
+
+async function fetchFrankfurterRate() {
+  const response = await fetch(`https://api.frankfurter.app/latest?from=USD&to=CNY&t=${Date.now()}`, {
+    headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
+    cf: { cacheTtl: 0, cacheEverything: false }
+  });
+  if (!response.ok) throw new Error('Frankfurter failed');
   const data = await response.json().catch(() => ({}));
   const rate = Number(data?.rates?.CNY);
-  if (!Number.isFinite(rate) || rate <= 0) return json({ message: '汇率数据异常，请稍后重试' }, 502);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error('Frankfurter invalid rate');
 
-  return json({
+  return {
     base: 'USD',
     quote: 'CNY',
     rate,
     date: cleanLine(data.date),
     source: 'Frankfurter'
+  };
+}
+
+async function fetchOpenExchangeRate() {
+  const response = await fetch(`https://open.er-api.com/v6/latest/USD?t=${Date.now()}`, {
+    headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
+    cf: { cacheTtl: 0, cacheEverything: false }
   });
+  if (!response.ok) throw new Error('ExchangeRate-API failed');
+  const data = await response.json().catch(() => ({}));
+  const rate = Number(data?.rates?.CNY);
+  if (data?.result !== 'success' || !Number.isFinite(rate) || rate <= 0) {
+    throw new Error('ExchangeRate-API invalid rate');
+  }
+
+  return {
+    base: 'USD',
+    quote: 'CNY',
+    rate,
+    date: cleanLine(exchangeDateFromUnix(data.time_last_update_unix)),
+    source: 'ExchangeRate-API'
+  };
+}
+
+function exchangeDateFromUnix(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '';
+  return new Date(seconds * 1000).toISOString().slice(0, 10);
 }
 
 function nowSeconds() {

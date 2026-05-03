@@ -57,6 +57,10 @@ import './styles.css';
 const defaultExchangeRate = 6.84;
 const exchangeRateSource = 'Frankfurter';
 const defaultCostLabels = ['账号成本', 'VPS', 'ESIM', '写卡器', '其他成本'];
+const costOwners = {
+  hongKong: 'hongKong',
+  wuhan: 'wuhan'
+};
 const pushTemplateStorageKey = 'gpc_push_templates';
 const pushFieldOptions = [
   { key: 'account', label: '账号', placeholder: '{account}' },
@@ -144,6 +148,7 @@ function createBlankCosts() {
     id: index + 1,
     label,
     amount: '',
+    owner: costOwners.hongKong,
     remark: ''
   }));
 }
@@ -173,6 +178,18 @@ function createBlankProduct() {
     settlementExchangeRate: null,
     settlementShareCnyHongKong: null,
     settlementShareCnyWuhan: null,
+    settlementHongKongCostUsd: null,
+    settlementWuhanCostUsd: null,
+    settlementProfitUsd: null,
+    settlementHongKongReceivableUsd: null,
+    settlementWuhanRetainedUsd: null,
+    settlementHongKongReceivableCny: null,
+    settlementWuhanRetainedCny: null,
+    accountType: '',
+    accountCreationDate: '',
+    accountCountry: '',
+    accountInfoRaw: '',
+    accountInfoFormatted: '',
     updatedAt: ''
   };
 }
@@ -254,29 +271,39 @@ function normalizeExchangeRate(value) {
   return Number.isFinite(number) && number > 0 ? number : defaultExchangeRate;
 }
 
-function settlementCnySnapshot(share, rate) {
+function settlementCnySnapshot(settlement, rate) {
   const normalizedRate = normalizeExchangeRate(rate);
-  const shareCny = Number((Number(share || 0) * normalizedRate).toFixed(2));
+  const hongKongReceivableUsd = Number(settlement?.hongKongReceivable || 0);
+  const wuhanRetainedUsd = Number(settlement?.wuhanRetained || 0);
+  const hongKongReceivableCny = Number((hongKongReceivableUsd * normalizedRate).toFixed(2));
+  const wuhanRetainedCny = Number((wuhanRetainedUsd * normalizedRate).toFixed(2));
   return {
     settlementExchangeRate: normalizedRate,
-    settlementShareCnyHongKong: shareCny,
-    settlementShareCnyWuhan: shareCny
+    settlementShareCnyHongKong: hongKongReceivableCny,
+    settlementShareCnyWuhan: wuhanRetainedCny,
+    settlementHongKongCostUsd: Number(settlement?.hongKongCost || 0),
+    settlementWuhanCostUsd: Number(settlement?.wuhanCost || 0),
+    settlementProfitUsd: Number(settlement?.profit || 0),
+    settlementHongKongReceivableUsd: hongKongReceivableUsd,
+    settlementWuhanRetainedUsd: wuhanRetainedUsd,
+    settlementHongKongReceivableCny,
+    settlementWuhanRetainedCny
   };
 }
 
-function productSettlementSnapshot(product, share) {
+function productSettlementSnapshot(product, settlement) {
   if (product.settlementStatus !== 'settled') return null;
   const rate = Number(product.settlementExchangeRate);
-  const hongKong = Number(product.settlementShareCnyHongKong);
-  const wuhan = Number(product.settlementShareCnyWuhan);
+  const hongKong = Number(product.settlementHongKongReceivableCny);
+  const wuhan = Number(product.settlementWuhanRetainedCny);
   if (Number.isFinite(rate) && rate > 0 && Number.isFinite(hongKong) && Number.isFinite(wuhan)) {
     return { rate, hongKong, wuhan };
   }
-  const fallback = settlementCnySnapshot(share, defaultExchangeRate);
+  const fallback = settlementCnySnapshot(settlement, Number.isFinite(rate) && rate > 0 ? rate : defaultExchangeRate);
   return {
     rate: fallback.settlementExchangeRate,
-    hongKong: fallback.settlementShareCnyHongKong,
-    wuhan: fallback.settlementShareCnyWuhan
+    hongKong: fallback.settlementHongKongReceivableCny,
+    wuhan: fallback.settlementWuhanRetainedCny
   };
 }
 
@@ -326,12 +353,41 @@ function buildMonthlyBars(products) {
   return [...byMonth.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, row]) => row).slice(-6);
 }
 
-function sumCosts(product) {
-  return product.costs.reduce((total, item) => total + Number(item.amount || 0), 0);
+function normalizeCostOwner(owner) {
+  return owner === costOwners.wuhan ? costOwners.wuhan : costOwners.hongKong;
+}
+
+function sumCosts(product, owner) {
+  const costs = Array.isArray(product?.costs) ? product.costs : [];
+  return costs.reduce((total, item) => {
+    if (owner && normalizeCostOwner(item.owner) !== owner) return total;
+    return total + Number(item.amount || 0);
+  }, 0);
 }
 
 function productProfit(product) {
-  return Number(product.salePrice || 0) - sumCosts(product);
+  return settlementAmounts(product).profit;
+}
+
+function settlementAmounts(product) {
+  const salePrice = Number(product?.salePrice || 0);
+  const hongKongCost = sumCosts(product, costOwners.hongKong);
+  const wuhanCost = sumCosts(product, costOwners.wuhan);
+  const totalCost = hongKongCost + wuhanCost;
+  const profit = salePrice - totalCost;
+  const hongKongProfitShare = profit / 2;
+  const wuhanProfitShare = profit / 2;
+  return {
+    salePrice,
+    hongKongCost,
+    wuhanCost,
+    totalCost,
+    profit,
+    hongKongProfitShare,
+    wuhanProfitShare,
+    hongKongReceivable: hongKongCost + hongKongProfitShare,
+    wuhanRetained: wuhanCost + wuhanProfitShare
+  };
 }
 
 function productStatus(product) {
@@ -351,6 +407,97 @@ function compactDateLabel(value, fallback) {
   if (!text) return fallback;
   const [, month, day] = text.split('-');
   return month && day ? `${month}/${day}` : fallback;
+}
+
+function normalizeMonthText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const isoMonth = text.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/);
+  if (isoMonth) return `${isoMonth[1]}-${isoMonth[2].padStart(2, '0')}`;
+  const dotted = text.match(/^(\d{4})[./年-](\d{1,2})/);
+  if (dotted) return `${dotted[1]}-${dotted[2].padStart(2, '0')}`;
+  const monthName = text.match(/(\d{1,2})?\s*([A-Za-z]+),?\s*(\d{4})|([A-Za-z]+)\s+(\d{1,2})?,?\s*(\d{4})/);
+  if (monthName) {
+    const monthText = monthName[2] || monthName[4];
+    const year = monthName[3] || monthName[6];
+    const monthIndex = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].findIndex((name) => monthText.toLowerCase().startsWith(name));
+    if (monthIndex >= 0) return `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+  }
+  return text;
+}
+
+function monthLabel(value) {
+  const normalized = normalizeMonthText(value);
+  const match = normalized.match(/^(\d{4})-(\d{2})/);
+  return match ? `${match[1]}.${Number(match[2])}` : normalized;
+}
+
+function accountAgeMonths(product) {
+  const listed = normalizeMonthText(productDateValue(product));
+  const created = normalizeMonthText(product?.accountCreationDate);
+  const listedMatch = listed.match(/^(\d{4})-(\d{2})/);
+  const createdMatch = created.match(/^(\d{4})-(\d{2})/);
+  if (!listedMatch || !createdMatch) return '';
+  const months = (Number(listedMatch[1]) - Number(createdMatch[1])) * 12 + (Number(listedMatch[2]) - Number(createdMatch[2]));
+  if (!Number.isFinite(months)) return '';
+  return `${Math.max(0, Math.round(months))}个月`;
+}
+
+function parseKeyValueText(text) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const result = {};
+  const urls = [];
+  for (const line of lines) {
+    if (/^https?:\/\//i.test(line)) {
+      urls.push(line);
+      continue;
+    }
+    const separator = line.indexOf(':');
+    if (separator < 0) {
+      if (/^no violations$/i.test(line)) result['no violations'] = 'No Violations';
+      if (/source code and keystore available/i.test(line)) result['source code and keystore available'] = 'Available';
+      continue;
+    }
+    const key = line.slice(0, separator).trim().toLowerCase();
+    const value = line.slice(separator + 1).trim();
+    result[key] = value;
+  }
+  if (urls.length) result.url = urls.join('\n');
+  return result;
+}
+
+function formatAccountInfo(rawText) {
+  const parsed = parseKeyValueText(rawText);
+  const lines = [
+    `Creation Date: ${parsed['creation date'] || ''}`,
+    `Online Applications: ${parsed['online applications'] || ''}`,
+    `Application Release Date: ${parsed['application release date'] || ''}`,
+    `IARC Email Date: ${parsed['iarc email date'] || ''}`,
+    `App Size: ${parsed['app size'] || ''}`,
+    parsed['source code and keystore available'] !== undefined ? 'Source Code and Keystore Available' : `Source Code and Keystore: ${parsed['source code and keystore'] || ''}`,
+    `Language: ${parsed.language || ''}`,
+    `Payment Profile: ${parsed['payment profile'] || ''}`,
+    `Country: ${parsed.country || ''}`,
+    parsed['no violations'] !== undefined ? 'No Violations' : `Violations: ${parsed.violations || ''}`
+  ];
+  if (parsed.url) lines.push(parsed.url);
+  return lines.join('\n');
+}
+
+function accountInfoPatch(rawText) {
+  const parsed = parseKeyValueText(rawText);
+  return {
+    accountInfoRaw: rawText,
+    accountInfoFormatted: formatAccountInfo(rawText),
+    accountCreationDate: normalizeMonthText(parsed['creation date'] || ''),
+    accountCountry: parsed.country || ''
+  };
+}
+
+function accountCost(product) {
+  const costs = Array.isArray(product?.costs) ? product.costs : [];
+  const matched = costs.find((item) => String(item.label || '').includes('账号'));
+  return Number(matched?.amount || 0);
 }
 
 function downloadCsv(filename, rows) {
@@ -542,6 +689,18 @@ function App() {
       settlementExchangeRate: null,
       settlementShareCnyHongKong: null,
       settlementShareCnyWuhan: null,
+      settlementHongKongCostUsd: null,
+      settlementWuhanCostUsd: null,
+      settlementProfitUsd: null,
+      settlementHongKongReceivableUsd: null,
+      settlementWuhanRetainedUsd: null,
+      settlementHongKongReceivableCny: null,
+      settlementWuhanRetainedCny: null,
+      accountType: '',
+      accountCreationDate: '',
+      accountCountry: '',
+      accountInfoRaw: '',
+      accountInfoFormatted: '',
       updatedAt: now.toLocaleTimeString('zh-CN', { hour12: false })
     };
     nextProduct.id = `draft-${Date.now()}`;
@@ -665,6 +824,7 @@ function App() {
             }}
           />
         )}
+        {page === 'account-details' && <AccountDetailsPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
         {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
         {page === 'workbench' && activeProduct && (
           <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} saving={productSync.saving} />
@@ -768,6 +928,7 @@ function Sidebar({ current, onChange, user }) {
   const nav = [
     { id: 'dashboard', label: '首页', icon: Home },
     { id: 'products', label: '产品列表', icon: ClipboardList },
+    { id: 'account-details', label: '账号详情', icon: UserRound },
     { id: 'push-settings', label: '推送设置', icon: Send },
     { id: 'settings', label: '系统设置', icon: Settings }
   ].filter((item) => item.id !== 'settings' || isSuperAdmin);
@@ -825,7 +986,7 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
   const missingCost = products.filter((item) => !item.costs.length || sumCosts(item) === 0).length;
   const pendingSettlement = products
     .filter((item) => item.isPaid && item.settlementStatus === 'unsettled')
-    .reduce((sum, item) => sum + productProfit(item), 0);
+    .reduce((sum, item) => sum + settlementAmounts(item).hongKongReceivable, 0);
 
   const pie = [
     { name: '待售', value: products.filter((item) => !item.isSold).length, color: '#3f74f6' },
@@ -861,7 +1022,7 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
         <Kpi icon={Coins} label="累计利润" value={money(totalProfit)} sub={`销售额 ${money(totalSales)}`} tone="orange" />
         <Kpi icon={TrendingUp} label="本月利润" value={money(monthlyBars.at(-1)?.profit || 0)} sub="当前产品数据" tone="green" />
         <Kpi icon={Database} label="待回款" value={money(pendingPayment)} sub={`${products.filter((item) => item.isSold && !item.isPaid).length} 笔`} tone="orange" negative />
-        <Kpi icon={CreditCard} label="待结算" value={money(pendingSettlement)} sub={`${products.filter((item) => item.isPaid && item.settlementStatus === 'unsettled').length} 笔`} tone="purple" />
+        <Kpi icon={CreditCard} label="待结算香港" value={money(pendingSettlement)} sub={`${products.filter((item) => item.isPaid && item.settlementStatus === 'unsettled').length} 笔`} tone="purple" />
       </div>
 
       <div className="dashboard-grid">
@@ -1077,7 +1238,7 @@ function ProductsPage({ products, pushTemplate, onOpenWorkbench, onAddProduct })
   const todayProducts = products.filter((item) => productDateValue(item) === today);
   const todaySold = products.filter((item) => item.isSold && String(item.saleTime || item.createdAt || '').slice(0, 10) === today);
   const todayPaid = todaySold.filter((item) => item.isPaid);
-  const unsettledProfit = unsettledProducts.reduce((sum, item) => sum + Math.max(productProfit(item), 0), 0);
+  const unsettledHongKongReceivable = unsettledProducts.reduce((sum, item) => sum + Math.max(settlementAmounts(item).hongKongReceivable, 0), 0);
   useEffect(() => {
     setCurrentPage(1);
   }, [keyword, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo, pageSize]);
@@ -1154,7 +1315,7 @@ function ProductsPage({ products, pushTemplate, onOpenWorkbench, onAddProduct })
           <MiniMetric icon={Box} label="今日新增" value={String(todayProducts.length)} />
           <MiniMetric icon={ShoppingCart} label="今日已售" value={String(todaySold.length)} />
           <MiniMetric icon={CreditCard} label="今日回款" value={String(todayPaid.length)} />
-          <MiniMetric icon={DollarSign} label="待结算利润" value={money(unsettledProfit)} accent />
+          <MiniMetric icon={DollarSign} label="待结算香港" value={money(unsettledHongKongReceivable)} accent />
           <div className="hint-card"><Info size={18} />提示：点击 “工作台” 可进入单个产品的详细录入与结算页面</div>
         </aside>
       </div>
@@ -1231,6 +1392,120 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
   );
 }
 
+function AccountDetailsPage({ products, onSaveProduct, saving }) {
+  const [activeId, setActiveId] = useState(products[0]?.id || '');
+  const [draftText, setDraftText] = useState('');
+  const [notice, setNotice] = useState('');
+  const activeProduct = products.find((item) => item.id === activeId) || products[0] || null;
+  const parsedPatch = useMemo(() => accountInfoPatch(draftText), [draftText]);
+  const formattedPreview = parsedPatch.accountInfoFormatted;
+
+  useEffect(() => {
+    if (!products.length) {
+      setActiveId('');
+      return;
+    }
+    setActiveId((current) => products.some((item) => item.id === current) ? current : products[0].id);
+  }, [products]);
+
+  useEffect(() => {
+    setDraftText(activeProduct?.accountInfoRaw || activeProduct?.accountInfoFormatted || '');
+    setNotice('');
+  }, [activeProduct?.id]);
+
+  const saveAccountPatch = async (product, patch, successMessage = '账号详情已保存。') => {
+    if (!product) return;
+    setNotice('');
+    const result = await onSaveProduct({ ...product, ...patch });
+    setNotice(result.ok ? successMessage : result.message || '保存失败，请稍后重试。');
+  };
+
+  const updateAccountType = (product, accountType) => {
+    saveAccountPatch(product, { accountType }, '账号类型已同步。');
+  };
+
+  const applyConverter = () => {
+    if (!activeProduct || !draftText.trim()) {
+      setNotice('请先选择账号并粘贴需要转换的信息。');
+      return;
+    }
+    saveAccountPatch(activeProduct, parsedPatch, '已转换并同步创建时间、国家和账号信息。');
+  };
+
+  return (
+    <section className="page account-details-page">
+      <div className="page-title"><h1>账号详情</h1><span>与产品列表同步的账号资料和文本转换器</span></div>
+      {notice && <div className="inline-notice"><Info size={15} />{notice}</div>}
+      <div className="account-details-grid">
+        <Panel className="account-table-panel" title="账号资料" hint="新增产品会自动出现在这里">
+          <div className="account-table-wrap">
+            <table className="product-table account-detail-table">
+              <thead>
+                <tr>
+                  <th>上架时间</th>
+                  <th>账号</th>
+                  <th>创建时间</th>
+                  <th>账号类型</th>
+                  <th>国家</th>
+                  <th>号码时常</th>
+                  <th>账号成本</th>
+                  <th>账号信息</th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((product) => (
+                  <tr key={product.id} className={activeProduct?.id === product.id ? 'selected-row' : ''} onClick={() => setActiveId(product.id)}>
+                    <td>{productDateValue(product)}</td>
+                    <td><CopyableAccountCell value={product.account || product.email} /></td>
+                    <td>{monthLabel(product.accountCreationDate) || '-'}</td>
+                    <td>
+                      <select
+                        className="table-select"
+                        value={product.accountType || ''}
+                        disabled={saving}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={(event) => updateAccountType(product, event.target.value)}
+                      >
+                        <option value="">未选择</option>
+                        <option value="enterprise">企业</option>
+                        <option value="personal">个人</option>
+                      </select>
+                    </td>
+                    <td>{product.accountCountry || '-'}</td>
+                    <td>{accountAgeMonths(product) || '-'}</td>
+                    <td>{money(accountCost(product))}</td>
+                    <td className="account-info-cell">{product.accountInfoFormatted || '-'}</td>
+                  </tr>
+                ))}
+                {!products.length && <tr><td colSpan={8}>暂无产品记录</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+
+        <Panel className="converter-panel" title="文本格式转换器" hint={activeProduct ? `当前账号：${activeProduct.account || activeProduct.email || `#${activeProduct.id}`}` : '请选择账号'}>
+          <textarea
+            className="converter-input"
+            value={draftText}
+            onChange={(event) => setDraftText(event.target.value)}
+            placeholder="粘贴 Creation Date、Country、Google Play 链接等信息"
+          />
+          <div className="converter-preview">
+            <strong>转换预览</strong>
+            <pre>{formattedPreview || '等待输入信息'}</pre>
+          </div>
+          <div className="converter-actions">
+            <button className="secondary-button" type="button" onClick={() => setDraftText(activeProduct?.accountInfoRaw || '')}>恢复当前账号信息</button>
+            <button className="primary-button" type="button" disabled={saving || !activeProduct} onClick={applyConverter}>
+              <Save size={16} />{saving ? '保存中...' : '转换并同步'}
+            </button>
+          </div>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
 function CopyableAccountCell({ value }) {
   const [copied, setCopied] = useState(false);
   const text = String(value || '');
@@ -1267,13 +1542,11 @@ function Workbench({ product, user, onSave, saving }) {
   const [draft, setDraft] = useState(product);
   const [dirty, setDirty] = useState(false);
   const [visible, setVisible] = useState({});
-  const [costDraft, setCostDraft] = useState({ label: '', amount: '', remark: '' });
+  const [costDraft, setCostDraft] = useState({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
   const [showCostForm, setShowCostForm] = useState(false);
   const [notice, setNotice] = useState('');
   const [fullView, setFullView] = useState(null);
-  const totalCost = sumCosts(draft);
-  const profit = productProfit(draft);
-  const share = profit / 2;
+  const settlement = settlementAmounts(draft);
   const canEditCredentials = user?.role === 'super_admin';
   const isNewProduct = String(draft.id).startsWith('draft-');
 
@@ -1281,7 +1554,7 @@ function Workbench({ product, user, onSave, saving }) {
     setDraft(product);
     setDirty(false);
     setNotice('');
-    setCostDraft({ label: '', amount: '', remark: '' });
+    setCostDraft({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
     setShowCostForm(false);
   }, [product?.id]);
 
@@ -1304,7 +1577,7 @@ function Workbench({ product, user, onSave, saving }) {
     commitChange({ [field]: value });
   };
   const updateSaleStatus = (checked) => {
-    if (checked && totalCost <= 0) {
+    if (checked && settlement.totalCost <= 0) {
       setNotice('请先填写成本后再标记售出，避免利润和分成被误算。');
       return;
     }
@@ -1324,20 +1597,24 @@ function Workbench({ product, user, onSave, saving }) {
     setNotice('');
     commitChange({ costs: draft.costs.map((item) => item.id === id ? { ...item, amount: amount === '' ? '' : Number(amount) } : item) });
   };
+  const updateCostOwner = (id, owner) => {
+    setNotice('');
+    commitChange({ costs: draft.costs.map((item) => item.id === id ? { ...item, owner: normalizeCostOwner(owner) } : item) });
+  };
   const addCost = () => {
     if (!costDraft.label || !costDraft.amount) return;
     const saved = commitChange({
       costs: [
         ...draft.costs,
-        { id: Date.now(), label: costDraft.label, amount: Number(costDraft.amount), remark: costDraft.remark }
+        { id: Date.now(), label: costDraft.label, amount: Number(costDraft.amount), owner: normalizeCostOwner(costDraft.owner), remark: costDraft.remark }
       ]
     });
     if (!saved) return;
-    setCostDraft({ label: '', amount: '', remark: '' });
+    setCostDraft({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
     setShowCostForm(false);
   };
   const settleProduct = async (rateSnapshot = {}) => {
-    if (totalCost <= 0) {
+    if (settlement.totalCost <= 0) {
       setNotice('请先填写成本后再结算。');
       return;
     }
@@ -1348,7 +1625,7 @@ function Workbench({ product, user, onSave, saving }) {
     const nextDraft = {
       ...draft,
       settlementStatus: 'settled',
-      ...settlementCnySnapshot(share, rateSnapshot.rate),
+      ...settlementCnySnapshot(settlement, rateSnapshot.rate),
       settledAt: new Date().toLocaleString('zh-CN', { hour12: false }),
       updatedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false })
     };
@@ -1356,7 +1633,7 @@ function Workbench({ product, user, onSave, saving }) {
     if (result.ok) {
       setDraft(result.product);
       setDirty(false);
-      setNotice('已保存结算状态，CNY 分成已按本次汇率锁定。');
+      setNotice('已保存结算状态，应结算香港与武汉留存金额已按本次汇率锁定。');
     } else {
       setNotice(result.message || '结算状态保存失败，请稍后重试。');
     }
@@ -1418,21 +1695,32 @@ function Workbench({ product, user, onSave, saving }) {
                 <label className="cost-input" key={item.id}>
                   <span>{item.label}（USD）</span>
                   <input type="number" value={item.amount ?? ''} onChange={(event) => updateCost(item.id, event.target.value)} />
+                  <select value={normalizeCostOwner(item.owner)} onChange={(event) => updateCostOwner(item.id, event.target.value)} aria-label={`${item.label}成本归属`}>
+                    <option value={costOwners.hongKong}>香港承担</option>
+                    <option value={costOwners.wuhan}>武汉承担</option>
+                  </select>
                 </label>
               ))}
               <button className="add-cost" onClick={() => setShowCostForm(true)}><Plus size={26} /><strong>添加成本标签</strong><span>支持自定义成本类别</span></button>
-              <div className="total-cost"><span>总成本（USD）</span><strong>{money(totalCost)}</strong></div>
+              <div className="total-cost"><span>总成本（USD）</span><strong>{money(settlement.totalCost)}</strong></div>
             </div>
             {showCostForm && (
               <div className="cost-popover">
                 <button className="close" type="button" aria-label="关闭成本表单" onClick={() => setShowCostForm(false)}><X size={16} /></button>
                 <Input label="成本名称" value={costDraft.label} onChange={(value) => setCostDraft({ ...costDraft, label: value })} />
                 <Input label="金额 USD" type="number" value={costDraft.amount} onChange={(value) => setCostDraft({ ...costDraft, amount: value })} />
+                <label className="input-label">
+                  <span>成本归属</span>
+                  <select className="plain-select" value={costDraft.owner} onChange={(event) => setCostDraft({ ...costDraft, owner: event.target.value })}>
+                    <option value={costOwners.hongKong}>香港承担</option>
+                    <option value={costOwners.wuhan}>武汉承担</option>
+                  </select>
+                </label>
                 <Input label="备注" value={costDraft.remark} onChange={(value) => setCostDraft({ ...costDraft, remark: value })} />
                 <button className="primary-button" type="button" onClick={addCost}>保存</button>
               </div>
             )}
-            <div className="support-note"><Info size={15} /> 支持自定义成本标签，可添加其他任何成本类别</div>
+            <div className="support-note"><Info size={15} /> 成本可选择香港或武汉承担；历史未标记成本默认按香港承担计算。</div>
           </Section>
 
           <Section title="销售登记" icon={LineChart} subtitle="登记销售信息与收款">
@@ -1445,24 +1733,27 @@ function Workbench({ product, user, onSave, saving }) {
             </div>
           </Section>
 
-          <Section title="自动结算" icon={ShieldCheck} subtitle="系统自动计算利润与分成（USD）">
+          <Section title="自动结算" icon={ShieldCheck} subtitle="系统自动计算双方成本回收与利润五五分">
             <div className="settlement-cards">
-              <MiniSettle label="总成本（USD）" value={money(totalCost)} />
-              <MiniSettle label="售价（USD）" value={money(draft.salePrice)} />
-              <MiniSettle label="利润（USD）" value={money(profit)} green />
-              <MiniSettle label="香港分成（50%）" value={money(share)} />
-              <MiniSettle label="武汉分成（50%）" value={money(share)} />
+              <MiniSettle label="销售收入（USD）" value={money(settlement.salePrice)} />
+              <MiniSettle label="香港成本（USD）" value={money(settlement.hongKongCost)} />
+              <MiniSettle label="武汉成本（USD）" value={money(settlement.wuhanCost)} />
+              <MiniSettle label="可分配利润（USD）" value={money(settlement.profit)} green />
+              <MiniSettle label="香港利润 50%" value={money(settlement.hongKongProfitShare)} />
+              <MiniSettle label="武汉利润 50%" value={money(settlement.wuhanProfitShare)} />
+              <MiniSettle label="武汉留存金额" value={money(settlement.wuhanRetained)} />
+              <MiniSettle label="应结算香港金额" value={money(settlement.hongKongReceivable)} green />
             </div>
           </Section>
         </div>
-        <ProfitPreview product={draft} totalCost={totalCost} profit={profit} share={share} onSettle={settleProduct} />
+        <ProfitPreview product={draft} settlement={settlement} onSettle={settleProduct} />
       </div>
       {fullView && <FullValueModal label={fullView.label} value={fullView.value} onClose={() => setFullView(null)} />}
     </section>
   );
 }
 
-function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
+function ProfitPreview({ product, settlement, onSettle }) {
   const [exchangeRate, setExchangeRate] = useState(defaultExchangeRate);
   const [rateMeta, setRateMeta] = useState({ date: '', source: exchangeRateSource });
   const [rateLoading, setRateLoading] = useState(false);
@@ -1471,10 +1762,10 @@ function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
   const [cnyAmount, setCnyAmount] = useState('');
   const rateAvailable = Number.isFinite(exchangeRate) && exchangeRate > 0;
   const isSettled = product.settlementStatus === 'settled';
-  const settlementSnapshot = productSettlementSnapshot(product, share);
+  const settlementSnapshot = productSettlementSnapshot(product, settlement);
   const displayRate = isSettled && settlementSnapshot ? settlementSnapshot.rate : exchangeRate;
-  const displayHongKongCny = isSettled && settlementSnapshot ? settlementSnapshot.hongKong : share * exchangeRate;
-  const displayWuhanCny = isSettled && settlementSnapshot ? settlementSnapshot.wuhan : share * exchangeRate;
+  const displayHongKongCny = isSettled && settlementSnapshot ? settlementSnapshot.hongKong : settlement.hongKongReceivable * exchangeRate;
+  const displayWuhanCny = isSettled && settlementSnapshot ? settlementSnapshot.wuhan : settlement.wuhanRetained * exchangeRate;
 
   const loadExchangeRate = async (manual = false) => {
     setRateLoading(true);
@@ -1517,11 +1808,14 @@ function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
   return (
     <aside className="profit-preview">
       <Panel title="实时利润预览">
-        <PreviewLine icon={Box} label="总成本（USD）" value={money(totalCost)} />
-        <PreviewLine icon={Database} label="售价（USD）" value={money(product.salePrice)} />
-        <PreviewLine icon={DollarSign} label="利润（USD）" value={money(profit)} green />
-        <PreviewLine icon={ShieldCheck} label="香港分成（50%）" value={money(share)} />
-        <PreviewLine icon={ShieldCheck} label="武汉分成（50%）" value={money(share)} />
+        <PreviewLine icon={Database} label="销售收入（USD）" value={money(settlement.salePrice)} />
+        <PreviewLine icon={Box} label="香港成本（USD）" value={money(settlement.hongKongCost)} />
+        <PreviewLine icon={Box} label="武汉成本（USD）" value={money(settlement.wuhanCost)} />
+        <PreviewLine icon={DollarSign} label="可分配利润（USD）" value={money(settlement.profit)} green />
+        <PreviewLine icon={ShieldCheck} label="香港利润分成（50%）" value={money(settlement.hongKongProfitShare)} />
+        <PreviewLine icon={WalletCards} label="武汉利润分成（50%）" value={money(settlement.wuhanProfitShare)} />
+        <PreviewLine icon={WalletCards} label="武汉留存金额" value={money(settlement.wuhanRetained)} />
+        <PreviewLine icon={Send} label="应结算香港金额" value={money(settlement.hongKongReceivable)} green />
       </Panel>
       <Panel className="rate-card">
         <div className="rate-title">
@@ -1556,13 +1850,13 @@ function ProfitPreview({ product, totalCost, profit, share, onSettle }) {
             ? `已结算金额按结算时汇率 ${displayRate.toFixed(4)} 锁定；上方换算器可继续查看当前汇率。`
             : '未结算时按进入页面/手动刷新得到的最新汇率实时折合，结算后会锁定本次 CNY 金额。'}
         </div>
-        <PreviewLine icon={ShieldCheck} label={isSettled ? '香港结算 CNY' : '香港分成折合 CNY'} value={rateAvailable ? cny(displayHongKongCny) : '-'} />
-        <PreviewLine icon={ShieldCheck} label={isSettled ? '武汉结算 CNY' : '武汉分成折合 CNY'} value={rateAvailable ? cny(displayWuhanCny) : '-'} />
+        <PreviewLine icon={Send} label={isSettled ? '应结算香港 CNY' : '应结算香港折合 CNY'} value={rateAvailable ? cny(displayHongKongCny) : '-'} />
+        <PreviewLine icon={WalletCards} label={isSettled ? '武汉留存 CNY' : '武汉留存折合 CNY'} value={rateAvailable ? cny(displayWuhanCny) : '-'} />
       </Panel>
       <Panel className="settlement-status">
         <div className="status-head"><strong>结算状态</strong><StatusBadge label={product.settlementStatus === 'settled' ? '已结算' : '未结算'} /></div>
-        <p>香港与武汉利润分成结算状态</p>
-        <div className="check-list"><span className={totalCost > 0 ? 'ok' : 'bad'}></span>{totalCost > 0 ? '已录入：成本信息' : '待处理：未填写成本'}</div>
+        <p>武汉回款后，保留武汉成本与利润，其余结算给香港。</p>
+        <div className="check-list"><span className={settlement.totalCost > 0 ? 'ok' : 'bad'}></span>{settlement.totalCost > 0 ? '已录入：成本信息' : '待处理：未填写成本'}</div>
         <div className="check-list"><span className={product.isPaid ? 'ok' : 'bad'}></span>{product.isPaid ? '已确认：回款完成' : '待处理：未回款不允许结算'}</div>
         <div className="check-list"><span className="bad"></span>{product.settlementStatus === 'settled' ? `已结算：${product.settledAt} Admin` : '未结算：尚未完成结算'}</div>
         {product.settlementStatus !== 'settled' && <button className="primary-button full" onClick={() => onSettle({ rate: exchangeRate })}>标记为已结算</button>}
