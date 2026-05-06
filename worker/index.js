@@ -33,6 +33,21 @@ export class AuthStore {
         return json({ ok: true, approved: true, user: publicUser(user), deviceId });
       }
 
+      if (isTrustedDevice(user, deviceId)) {
+        return json({ ok: true, approved: true, user: publicUser(user), deviceId });
+      }
+
+      const requests = await this.state.storage.list({ prefix: 'login_request:' });
+      for (const loginRequest of requests.values()) {
+        if (
+          loginRequest.username === username &&
+          loginRequest.deviceId === deviceId &&
+          loginRequest.status === 'pending'
+        ) {
+          return json({ ok: true, approved: false, requestId: loginRequest.id, message: '已提交登录申请，等待超级管理员批准' });
+        }
+      }
+
       const requestId = crypto.randomUUID();
       await this.state.storage.put(`login_request:${requestId}`, {
         id: requestId,
@@ -58,6 +73,7 @@ export class AuthStore {
 
       loginRequest.consumedAt = new Date().toISOString();
       await this.state.storage.put(`login_request:${requestId}`, loginRequest);
+      await trustDevice(this.state, user, loginRequest.deviceId);
       return json({ approved: true, user: publicUser(user), deviceId: loginRequest.deviceId });
     }
 
@@ -87,6 +103,7 @@ export class AuthStore {
         status: 'active',
         passwordHash: await hashPbkdf2(password),
         initialPassword: role === 'partner_admin' ? password : undefined,
+        trustedDeviceIds: [],
         createdAt: new Date().toISOString()
       };
       await this.state.storage.put(`user:${username}`, user);
@@ -163,6 +180,10 @@ export class AuthStore {
       loginRequest.status = 'approved';
       loginRequest.approvedAt = new Date().toISOString();
       await this.state.storage.put(`login_request:${requestId}`, loginRequest);
+      const user = await this.state.storage.get(`user:${loginRequest.username}`);
+      if (user) {
+        await trustDevice(this.state, user, loginRequest.deviceId);
+      }
       return json({ request: loginRequest });
     }
 
@@ -510,6 +531,36 @@ function normalizeDeviceId(value) {
   const text = String(value || '').trim();
   if (!text || text.length > 128) return '';
   return text;
+}
+
+function normalizeTrustedDeviceIds(value) {
+  if (!Array.isArray(value)) return [];
+  const ids = [];
+  const seen = new Set();
+  for (const item of value) {
+    const deviceId = normalizeDeviceId(item);
+    if (!deviceId || seen.has(deviceId)) continue;
+    seen.add(deviceId);
+    ids.push(deviceId);
+  }
+  return ids.slice(0, 20);
+}
+
+function isTrustedDevice(user, deviceId) {
+  const normalizedDeviceId = normalizeDeviceId(deviceId);
+  if (!normalizedDeviceId) return false;
+  return normalizeTrustedDeviceIds(user?.trustedDeviceIds).includes(normalizedDeviceId);
+}
+
+async function trustDevice(state, user, deviceId) {
+  const normalizedDeviceId = normalizeDeviceId(deviceId);
+  if (!normalizedDeviceId || !user) return user;
+  const trustedDeviceIds = normalizeTrustedDeviceIds(user.trustedDeviceIds);
+  if (trustedDeviceIds.includes(normalizedDeviceId)) return user;
+  user.trustedDeviceIds = [normalizedDeviceId, ...trustedDeviceIds].slice(0, 20);
+  user.updatedAt = new Date().toISOString();
+  await state.storage.put(`user:${user.username}`, user);
+  return user;
 }
 
 function publicUser(user) {

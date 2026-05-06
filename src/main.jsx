@@ -19,6 +19,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  Bell,
   Home,
   Info,
   LayoutDashboard,
@@ -592,11 +593,29 @@ function App() {
   const [pushTemplates, setPushTemplates] = useState(readStoredPushTemplates);
   const [deviceId] = useState(getDeviceId);
   const [authState, setAuthState] = useState({ loading: true, authenticated: false, user: null, pendingRequestId: '' });
+  const [adminLoginRequests, setAdminLoginRequests] = useState([]);
+  const adminLoginRequestsActive = useRef(false);
   const activeProduct = draftProduct && draftProduct.id === activeId
     ? draftProduct
     : products.find((item) => item.id === activeId) || products[0] || null;
   const currentUser = authState.user;
   const isSuperAdmin = currentUser?.role === 'super_admin';
+  const pendingLoginCount = adminLoginRequests.filter((item) => item.status === 'pending').length;
+  const refreshAdminLoginRequests = async () => {
+    if (!authState.authenticated || !isSuperAdmin) {
+      setAdminLoginRequests([]);
+      return;
+    }
+
+    try {
+      const data = await apiJson('/api/admin/login-requests');
+      if (!adminLoginRequestsActive.current) return;
+      setAdminLoginRequests(Array.isArray(data.requests) ? data.requests : []);
+    } catch {
+      if (!adminLoginRequestsActive.current) return;
+      setAdminLoginRequests([]);
+    }
+  };
   const listPushTemplate = useMemo(() => {
     return pushTemplates.find((item) => item.scene === 'products' && item.active)
       || pushTemplates.find((item) => item.scene === 'products')
@@ -622,6 +641,29 @@ function App() {
       }))
       .catch(() => setAuthState({ loading: false, authenticated: false, user: null, pendingRequestId: '' }));
   }, []);
+
+  useEffect(() => {
+    if (!authState.authenticated || !isSuperAdmin) {
+      setAdminLoginRequests([]);
+      adminLoginRequestsActive.current = false;
+      return;
+    }
+
+    adminLoginRequestsActive.current = true;
+    let cancelled = false;
+    const loadAdminLoginRequests = async () => {
+      await refreshAdminLoginRequests();
+      if (cancelled) return;
+    };
+
+    loadAdminLoginRequests();
+    const timer = window.setInterval(loadAdminLoginRequests, 15000);
+    return () => {
+      cancelled = true;
+      adminLoginRequestsActive.current = false;
+      window.clearInterval(timer);
+    };
+  }, [authState.authenticated, isSuperAdmin]);
 
   useEffect(() => {
     window.localStorage.setItem(pushTemplateStorageKey, JSON.stringify(pushTemplates));
@@ -809,9 +851,21 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar current={page} onChange={setPage} user={currentUser} />
+      <Sidebar current={page} onChange={setPage} user={currentUser} pendingLoginCount={pendingLoginCount} />
       <main className="main">
-        <Topbar user={currentUser} onLogout={logout} />
+        <Topbar
+          user={currentUser}
+          onLogout={logout}
+          onOpenSettings={() => setPage('settings')}
+          pendingLoginCount={pendingLoginCount}
+        />
+        {isSuperAdmin && pendingLoginCount > 0 && (
+          <div className="admin-alert">
+            <Bell size={15} />
+            <span>有 {pendingLoginCount} 条待审批登录申请</span>
+            <button className="link-button" type="button" onClick={() => setPage('settings')}>去系统设置</button>
+          </div>
+        )}
         {page === 'dashboard' && <Dashboard products={products} onOpenProducts={() => setPage('products')} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
         {page === 'products' && (
           <ProductsPage
@@ -836,7 +890,9 @@ function App() {
             onChange={setPushTemplates}
           />
         )}
-        {page === 'settings' && isSuperAdmin && <SettingsPage user={currentUser} />}
+        {page === 'settings' && isSuperAdmin && (
+          <SettingsPage user={currentUser} onRequestsChanged={refreshAdminLoginRequests} />
+        )}
       </main>
     </div>
   );
@@ -923,7 +979,7 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
   );
 }
 
-function Sidebar({ current, onChange, user }) {
+function Sidebar({ current, onChange, user, pendingLoginCount }) {
   const isSuperAdmin = user?.role === 'super_admin';
   const nav = [
     { id: 'dashboard', label: '首页', icon: Home },
@@ -948,12 +1004,17 @@ function Sidebar({ current, onChange, user }) {
           return (
             <button
               key={item.id}
-              className={`nav-item ${current === item.id ? 'active' : ''}`}
-              onClick={() => !item.disabled && onChange(item.id)}
-              disabled={item.disabled}
-            >
-              <Icon size={17} />
-              <span>{item.label}</span>
+            className={`nav-item ${current === item.id ? 'active' : ''}`}
+            onClick={() => !item.disabled && onChange(item.id)}
+            disabled={item.disabled}
+          >
+              <span className="nav-item-main">
+                <Icon size={17} />
+                <span>{item.label}</span>
+              </span>
+              {item.id === 'settings' && pendingLoginCount > 0 && (
+                <span className="nav-count">{pendingLoginCount}</span>
+              )}
             </button>
           );
         })}
@@ -962,11 +1023,17 @@ function Sidebar({ current, onChange, user }) {
   );
 }
 
-function Topbar({ user, onLogout }) {
+function Topbar({ user, onLogout, onOpenSettings, pendingLoginCount }) {
   const roleLabel = user?.role === 'super_admin' ? '超级管理员' : '伙伴管理员';
   return (
     <header className="topbar">
       <div className="topbar-spacer" />
+      {pendingLoginCount > 0 && (
+        <button className="topbar-alert" type="button" onClick={onOpenSettings}>
+          <Bell size={15} />
+          <span>待审批 {pendingLoginCount}</span>
+        </button>
+      )}
       <div className="avatar">{user?.username?.slice(0, 1)?.toUpperCase() || 'A'}</div>
       <div className="admin">{user?.username || 'Admin'}<span>{roleLabel}</span></div>
       <button className="logout-button" onClick={onLogout}>退出</button>
@@ -2131,12 +2198,13 @@ function PushSettingsPage({ products, templates, onChange }) {
   );
 }
 
-function SettingsPage({ user }) {
+function SettingsPage({ user, onRequestsChanged }) {
   const isSuperAdmin = user?.role === 'super_admin';
   const [users, setUsers] = useState([]);
   const [requests, setRequests] = useState([]);
   const [accountDraft, setAccountDraft] = useState({ username: '', password: '' });
   const [settingsMessage, setSettingsMessage] = useState('');
+  const pendingRequests = requests.filter((item) => item.status === 'pending');
 
   const loadAdminData = async () => {
     if (!isSuperAdmin) return;
@@ -2182,6 +2250,7 @@ function SettingsPage({ user }) {
     }
     setSettingsMessage('已同意该伙伴管理员登录');
     loadAdminData();
+    onRequestsChanged?.();
   };
 
   const updateUserStatus = async (targetUser, status) => {
@@ -2241,9 +2310,15 @@ function SettingsPage({ user }) {
             </section>
             <section className="settings-block">
               <h3>待审批登录</h3>
+              {pendingRequests.length > 0 && (
+                <div className="settings-alert">
+                  <Bell size={15} />
+                  <span>当前有 {pendingRequests.length} 条待审批登录申请</span>
+                </div>
+              )}
               <div className="approval-list">
-                {requests.filter((item) => item.status === 'pending').length === 0 && <p>暂无待审批登录申请</p>}
-                {requests.filter((item) => item.status === 'pending').map((item) => (
+                {pendingRequests.length === 0 && <p>暂无待审批登录申请</p>}
+                {pendingRequests.map((item) => (
                   <div className="approval-row" key={item.id}>
                     <div>
                       <strong>{item.username}</strong>
