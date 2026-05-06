@@ -927,6 +927,28 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
     }
   };
 
+  useEffect(() => {
+    if (!activeRequestId) return;
+    let cancelled = false;
+
+    const pollApproval = async () => {
+      const result = await onCheckApproval(activeRequestId);
+      if (cancelled) return;
+      if (!result.ok) {
+        setMessage(result.message || '还在等待超级管理员批准');
+        return;
+      }
+      if (result.approved) setMessage('');
+    };
+
+    pollApproval();
+    const timer = window.setInterval(pollApproval, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeRequestId, onCheckApproval]);
+
   return (
     <main className="login-page">
       <section className="login-card">
