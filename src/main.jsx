@@ -261,6 +261,10 @@ function cny(value) {
   return money(value, '¥');
 }
 
+function usdToCny(value, rate = defaultExchangeRate) {
+  return Number(value || 0) * normalizeExchangeRate(rate);
+}
+
 function formatExchangeValue(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '';
@@ -594,6 +598,7 @@ function App() {
   const [deviceId] = useState(getDeviceId);
   const [authState, setAuthState] = useState({ loading: true, authenticated: false, user: null, pendingRequestId: '' });
   const [adminLoginRequests, setAdminLoginRequests] = useState([]);
+  const [exchangeRate, setExchangeRate] = useState(defaultExchangeRate);
   const adminLoginRequestsActive = useRef(false);
   const activeProduct = draftProduct && draftProduct.id === activeId
     ? draftProduct
@@ -698,6 +703,21 @@ function App() {
       .catch((error) => {
         if (cancelled) return;
         setProductSync({ loading: false, saving: false, message: error.message || '产品数据读取失败，当前显示本地示例数据。' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.authenticated]);
+
+  useEffect(() => {
+    if (!authState.authenticated) return;
+    let cancelled = false;
+    apiJson('/api/exchange-rate')
+      .then((data) => {
+        if (!cancelled) setExchangeRate(normalizeExchangeRate(data.rate));
+      })
+      .catch(() => {
+        if (!cancelled) setExchangeRate(defaultExchangeRate);
       });
     return () => {
       cancelled = true;
@@ -866,10 +886,11 @@ function App() {
             <button className="link-button" type="button" onClick={() => setPage('settings')}>去系统设置</button>
           </div>
         )}
-        {page === 'dashboard' && <Dashboard products={products} onOpenProducts={() => setPage('products')} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
+        {page === 'dashboard' && <Dashboard products={products} exchangeRate={exchangeRate} onOpenProducts={() => setPage('products')} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
         {page === 'products' && (
           <ProductsPage
             products={products}
+            exchangeRate={exchangeRate}
             pushTemplate={listPushTemplate}
             onAddProduct={addProduct}
             onOpenWorkbench={(id) => {
@@ -1063,7 +1084,7 @@ function Topbar({ user, onLogout, onOpenSettings, pendingLoginCount }) {
   );
 }
 
-function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
+function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) {
   const [trendRange, setTrendRange] = useState('7d');
   const [customTrendRange, setCustomTrendRange] = useState({ from: '', to: '' });
   const total = products.length;
@@ -1111,7 +1132,7 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
         <Kpi icon={Coins} label="累计利润" value={money(totalProfit)} sub={`销售额 ${money(totalSales)}`} tone="orange" />
         <Kpi icon={TrendingUp} label="本月利润" value={money(monthlyBars.at(-1)?.profit || 0)} sub="当前产品数据" tone="green" />
         <Kpi icon={Database} label="待回款" value={money(pendingPayment)} sub={`${products.filter((item) => item.isSold && !item.isPaid).length} 笔`} tone="orange" negative />
-        <Kpi icon={CreditCard} label="待结算香港" value={money(pendingSettlement)} sub={`${products.filter((item) => item.isPaid && item.settlementStatus === 'unsettled').length} 笔`} tone="purple" />
+        <Kpi icon={CreditCard} label="待结算香港" value={money(pendingSettlement)} subValue={cny(usdToCny(pendingSettlement, exchangeRate))} sub={`${products.filter((item) => item.isPaid && item.settlementStatus === 'unsettled').length} 笔`} tone="purple" />
       </div>
 
       <div className="dashboard-grid">
@@ -1205,13 +1226,14 @@ function Dashboard({ products, onOpenWorkbench, onOpenProducts }) {
   );
 }
 
-function Kpi({ icon: Icon, label, value, sub, tone, negative }) {
+function Kpi({ icon: Icon, label, value, subValue, sub, tone, negative }) {
   return (
     <div className="kpi-card">
       <div className={`icon-bubble ${tone}`}><Icon size={20} /></div>
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
+        {subValue && <em className="amount-subvalue">{subValue}</em>}
         {sub && <p><span>{sub}</span><b className={negative ? 'down' : 'up'}>{negative ? '↓' : '↑'}</b></p>}
       </div>
     </div>
@@ -1294,7 +1316,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ products, pushTemplate, onOpenWorkbench, onAddProduct }) {
+function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct }) {
   const [keyword, setKeyword] = useState('');
   const [saleFilter, setSaleFilter] = useState('全部');
   const [paidFilter, setPaidFilter] = useState('全部');
@@ -1404,7 +1426,7 @@ function ProductsPage({ products, pushTemplate, onOpenWorkbench, onAddProduct })
           <MiniMetric icon={Box} label="今日新增" value={String(todayProducts.length)} />
           <MiniMetric icon={ShoppingCart} label="今日已售" value={String(todaySold.length)} />
           <MiniMetric icon={CreditCard} label="今日回款" value={String(todayPaid.length)} />
-          <MiniMetric icon={DollarSign} label="待结算香港" value={money(unsettledHongKongReceivable)} accent />
+          <MiniMetric icon={DollarSign} label="待结算香港" value={money(unsettledHongKongReceivable)} subValue={cny(usdToCny(unsettledHongKongReceivable, exchangeRate))} accent />
           <div className="hint-card"><Info size={18} />提示：点击 “工作台” 可进入单个产品的详细录入与结算页面</div>
         </aside>
       </div>
@@ -2086,8 +2108,8 @@ function PreviewLine({ icon: Icon, label, value, green }) {
   );
 }
 
-function MiniMetric({ icon: Icon, label, value, accent }) {
-  return <div className="mini-metric"><Icon size={20} /><span>{label}</span><strong className={accent ? 'orange-text' : ''}>{value}</strong></div>;
+function MiniMetric({ icon: Icon, label, value, subValue, accent }) {
+  return <div className="mini-metric"><Icon size={20} /><span>{label}</span><strong className={accent ? 'orange-text' : ''}>{value}</strong>{subValue && <em className="amount-subvalue">{subValue}</em>}</div>;
 }
 
 function StatusBadge({ label }) {
