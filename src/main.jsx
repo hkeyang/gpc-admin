@@ -403,6 +403,15 @@ function productStatus(product) {
   return '已结算';
 }
 
+function shouldShowPendingSettlement(product) {
+  return Boolean(product?.isSold && product?.settlementStatus === 'unsettled');
+}
+
+function settlementStatusLabel(product) {
+  if (!product?.isSold) return '-';
+  return product.settlementStatus === 'settled' ? '已结算' : '未结算';
+}
+
 function productDateValue(product) {
   return String(product.createdAt || '').slice(0, 10);
 }
@@ -1095,7 +1104,7 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
   const pendingPayment = products.filter((item) => item.isSold && !item.isPaid).reduce((sum, item) => sum + Number(item.salePrice || 0), 0);
   const missingCost = products.filter((item) => !item.costs.length || sumCosts(item) === 0).length;
   const pendingSettlement = products
-    .filter((item) => item.isPaid && item.settlementStatus === 'unsettled')
+    .filter((item) => shouldShowPendingSettlement(item))
     .reduce((sum, item) => sum + settlementAmounts(item).hongKongReceivable, 0);
 
   const pie = [
@@ -1132,7 +1141,7 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
         <Kpi icon={Coins} label="累计利润" value={money(totalProfit)} sub={`销售额 ${money(totalSales)}`} tone="orange" />
         <Kpi icon={TrendingUp} label="本月利润" value={money(monthlyBars.at(-1)?.profit || 0)} sub="当前产品数据" tone="green" />
         <Kpi icon={Database} label="待回款" value={money(pendingPayment)} sub={`${products.filter((item) => item.isSold && !item.isPaid).length} 笔`} tone="orange" negative />
-        <Kpi icon={CreditCard} label="待结算香港" value={money(pendingSettlement)} subValue={cny(usdToCny(pendingSettlement, exchangeRate))} sub={`${products.filter((item) => item.isPaid && item.settlementStatus === 'unsettled').length} 笔`} tone="purple" />
+        <Kpi icon={CreditCard} label="待结算香港" value={money(pendingSettlement)} subValue={cny(usdToCny(pendingSettlement, exchangeRate))} sub={`${products.filter((item) => shouldShowPendingSettlement(item)).length} 笔`} tone="purple" />
       </div>
 
       <div className="dashboard-grid">
@@ -1180,7 +1189,7 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
         <Panel title="关键提醒" action={<button className="link-button" onClick={onOpenProducts}>查看全部 <ChevronRight size={14} /></button>}>
           <div className="alerts">
             <AlertRow icon={AlertTriangle} label="未回款" value={money(pendingPayment)} sub={`共 ${products.filter((item) => item.isSold && !item.isPaid).length} 笔`} tone="red" />
-            <AlertRow icon={ShieldCheck} label="未结算" value={money(pendingSettlement)} sub={`共 ${products.filter((item) => item.isPaid && item.settlementStatus === 'unsettled').length} 笔`} tone="orange" />
+            <AlertRow icon={ShieldCheck} label="未结算" value={money(pendingSettlement)} sub={`共 ${products.filter((item) => shouldShowPendingSettlement(item)).length} 笔`} tone="orange" />
             <AlertRow icon={UserRound} label="待补成本" value={`${missingCost} 个`} sub="成本为 0 或未填写" tone="purple" />
           </div>
         </Panel>
@@ -1333,7 +1342,7 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
       const matchesKeyword = keywordText.includes(keyword.toLowerCase());
       const matchesSale = saleFilter === '全部' || (saleFilter === '待售' ? !item.isSold : item.isSold);
       const matchesPaid = paidFilter === '全部' || (paidFilter === '未回款' ? !item.isPaid : item.isPaid);
-      const matchesSettlement = settlementFilter === '全部' || (settlementFilter === '未结算' ? item.settlementStatus === 'unsettled' : item.settlementStatus === 'settled');
+      const matchesSettlement = settlementFilter === '全部' || (settlementFilter === '未结算' ? shouldShowPendingSettlement(item) : item.settlementStatus === 'settled');
       const createdDate = productDateValue(item);
       const matchesDateFrom = !dateFrom || createdDate >= dateFrom;
       const matchesDateTo = !dateTo || createdDate <= dateTo;
@@ -1345,7 +1354,7 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
   const today = localDateInput();
   const soldProducts = products.filter((item) => item.isSold);
   const paidProducts = products.filter((item) => item.isPaid);
-  const unsettledProducts = products.filter((item) => item.settlementStatus === 'unsettled');
+  const unsettledProducts = products.filter((item) => shouldShowPendingSettlement(item));
   const todayProducts = products.filter((item) => productDateValue(item) === today);
   const todaySold = products.filter((item) => item.isSold && String(item.saleTime || item.createdAt || '').slice(0, 10) === today);
   const todayPaid = todaySold.filter((item) => item.isPaid);
@@ -1490,7 +1499,7 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
               <td className="profit-text">{profit.toFixed(2)}</td>
               <td><StatusBadge label={item.isSold ? '已售' : '待售'} /></td>
               <td>{item.isSold ? <StatusBadge label={item.isPaid ? '已回款' : '未回款'} /> : '-'}</td>
-              <td><StatusBadge label={item.settlementStatus === 'settled' ? '已结算' : '未结算'} /></td>
+              <td><StatusBadge label={settlementStatusLabel(item)} /></td>
               <td className="actions">
                 <button onClick={() => onOpenWorkbench(item.id)}>工作台</button>
                 <button disabled={pushingId === item.id} onClick={() => onPushProduct(item)}>{pushingId === item.id ? '推送中' : '推送'}</button>
@@ -1957,22 +1966,25 @@ function ProfitPreview({ product, settlement, onSettle }) {
       </Panel>
       <Panel className="rmb-card">
         <div className="currency-note">
-          {isSettled
-            ? `已结算金额按结算时汇率 ${displayRate.toFixed(4)} 锁定；上方换算器可继续查看当前汇率。`
-            : '未结算时按进入页面/手动刷新得到的最新汇率实时折合，结算后会锁定本次 CNY 金额。'}
+          {product.isSold
+            ? (isSettled
+              ? `已结算金额按结算时汇率 ${displayRate.toFixed(4)} 锁定；上方换算器可继续查看当前汇率。`
+              : '未结算时按进入页面/手动刷新得到的最新汇率实时折合，结算后会锁定本次 CNY 金额。')
+            : '待售产品仅作利润预览，不进入待结算展示。'}
         </div>
-        <PreviewLine icon={Send} label={isSettled ? '应结算香港 CNY' : '应结算香港折合 CNY'} value={rateAvailable ? cny(displayHongKongCny) : '-'} />
-        <PreviewLine icon={WalletCards} label={isSettled ? '武汉留存 CNY' : '武汉留存折合 CNY'} value={rateAvailable ? cny(displayWuhanCny) : '-'} />
+        <PreviewLine icon={Send} label={product.isSold ? (isSettled ? '应结算香港 CNY' : '应结算香港折合 CNY') : '待售香港折合 CNY'} value={rateAvailable ? cny(displayHongKongCny) : '-'} />
+        <PreviewLine icon={WalletCards} label={product.isSold ? (isSettled ? '武汉留存 CNY' : '武汉留存折合 CNY') : '待售武汉折合 CNY'} value={rateAvailable ? cny(displayWuhanCny) : '-'} />
       </Panel>
       <Panel className="settlement-status">
-        <div className="status-head"><strong>结算状态</strong><StatusBadge label={product.settlementStatus === 'settled' ? '已结算' : '未结算'} /></div>
+        <div className="status-head"><strong>结算状态</strong><StatusBadge label={product.isSold ? (product.settlementStatus === 'settled' ? '已结算' : '未结算') : '待售'} /></div>
         <p>武汉回款后，保留武汉成本与利润，其余结算给香港。</p>
         <div className="check-list"><span className={settlement.totalCost > 0 ? 'ok' : 'bad'}></span>{settlement.totalCost > 0 ? '已录入：成本信息' : '待处理：未填写成本'}</div>
+        <div className="check-list"><span className={product.isSold ? 'ok' : 'bad'}></span>{product.isSold ? '已确认：产品已售' : '待处理：售出后进入结算流程'}</div>
         <div className="check-list"><span className={product.isPaid ? 'ok' : 'bad'}></span>{product.isPaid ? '已确认：回款完成' : '待处理：未回款不允许结算'}</div>
-        <div className="check-list"><span className="bad"></span>{product.settlementStatus === 'settled' ? `已结算：${product.settledAt} Admin` : '未结算：尚未完成结算'}</div>
-        {product.settlementStatus !== 'settled' && <button className="primary-button full" onClick={() => onSettle({ rate: exchangeRate })}>标记为已结算</button>}
+        <div className="check-list"><span className={product.isSold && product.settlementStatus === 'settled' ? 'ok' : 'bad'}></span>{product.isSold ? (product.settlementStatus === 'settled' ? `已结算：${product.settledAt} Admin` : '未结算：尚未完成结算') : '待售：售出后才会进入待结算'}</div>
+        {product.isSold && product.settlementStatus !== 'settled' && <button className="primary-button full" onClick={() => onSettle({ rate: exchangeRate })}>标记为已结算</button>}
       </Panel>
-      <div className="calc-note">{isSettled ? '已结算 CNY 金额保持不变' : '实时计算，自动更新'}</div>
+      <div className="calc-note">{isSettled ? '已结算 CNY 金额保持不变' : (product.isSold ? '实时计算，自动更新' : '待售时仅作预览，不参与结算')}</div>
     </aside>
   );
 }
