@@ -155,6 +155,36 @@ export class AuthStore {
       return json({ ok: true, deleted });
     }
 
+    if (url.pathname === '/purchase-expenses' && request.method === 'GET') {
+      return json({ expenses: await this.listPurchaseExpenses() });
+    }
+
+    if (url.pathname === '/purchase-expenses' && request.method === 'POST') {
+      const body = await readJson(request);
+      const result = await this.savePurchaseExpense(body);
+      if (result.error) return json({ message: result.error }, 400);
+      return json({ expense: result.expense }, 201);
+    }
+
+    const purchaseExpenseMatch = url.pathname.match(/^\/purchase-expenses\/([^/]+)$/);
+    if (purchaseExpenseMatch && request.method === 'PUT') {
+      const id = decodeURIComponent(purchaseExpenseMatch[1]);
+      const existing = await this.state.storage.get(`purchase_expense:${id}`);
+      if (!existing) return json({ message: '代采购费用不存在' }, 404);
+      const body = await readJson(request);
+      const result = await this.savePurchaseExpense({ ...existing, ...body, id }, id);
+      if (result.error) return json({ message: result.error }, 400);
+      return json({ expense: result.expense });
+    }
+
+    if (purchaseExpenseMatch && request.method === 'DELETE') {
+      const id = decodeURIComponent(purchaseExpenseMatch[1]);
+      const existing = await this.state.storage.get(`purchase_expense:${id}`);
+      if (!existing) return json({ message: '代采购费用不存在' }, 404);
+      await this.state.storage.delete(`purchase_expense:${id}`);
+      return json({ ok: true });
+    }
+
     const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
     if (productMatch && request.method === 'PUT') {
       const id = decodeURIComponent(productMatch[1]);
@@ -280,6 +310,33 @@ export class AuthStore {
     await Promise.all([...entries.keys()].map((key) => this.state.storage.delete(key)));
     await this.state.storage.put('products_seeded', true);
     return entries.size;
+  }
+
+  async listPurchaseExpenses() {
+    const entries = await this.state.storage.list({ prefix: 'purchase_expense:' });
+    return [...entries.values()].sort((a, b) => {
+      const dateCompare = String(b.purchaseDate || '').localeCompare(String(a.purchaseDate || ''));
+      return dateCompare || compareProductIds(b.id, a.id);
+    });
+  }
+
+  async nextPurchaseExpenseId() {
+    const expenses = await this.listPurchaseExpenses();
+    const maxId = expenses.reduce((max, expense) => {
+      const id = Number(expense.id);
+      return Number.isFinite(id) ? Math.max(max, id) : max;
+    }, 0);
+    return maxId + 1;
+  }
+
+  async savePurchaseExpense(input, fixedId) {
+    const id = fixedId ?? input.id ?? await this.nextPurchaseExpenseId();
+    const expense = sanitizePurchaseExpense(input, id);
+    if (!expense.itemName) return { error: '请填写采购产品或事项名称' };
+    if (expense.amountUsd <= 0) return { error: '支出金额 USD 必须大于 0' };
+    if (expense.exchangeRate <= 0) return { error: 'USD/CNY 汇率必须大于 0' };
+    await this.state.storage.put(`purchase_expense:${expense.id}`, expense);
+    return { expense };
   }
 }
 
@@ -416,6 +473,23 @@ async function handleApi(request, env, url) {
     return authStore(env).fetch(new Request('https://auth.local/products', {
       method: request.method,
       body: request.method === 'POST' ? await request.text() : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  if (url.pathname === '/api/purchase-expenses' && ['GET', 'POST'].includes(request.method)) {
+    return authStore(env).fetch(new Request('https://auth.local/purchase-expenses', {
+      method: request.method,
+      body: request.method === 'POST' ? await request.text() : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  const purchaseExpenseMatch = url.pathname.match(/^\/api\/purchase-expenses\/([^/]+)$/);
+  if (purchaseExpenseMatch && ['PUT', 'DELETE'].includes(request.method)) {
+    return authStore(env).fetch(new Request(`https://auth.local/purchase-expenses/${purchaseExpenseMatch[1]}`, {
+      method: request.method,
+      body: request.method === 'PUT' ? await request.text() : undefined,
       headers: { 'Content-Type': 'application/json' }
     }));
   }
@@ -585,6 +659,7 @@ function sanitizeProduct(input, id) {
   const updatedAt = now.toLocaleTimeString('zh-CN', { hour12: false });
   return {
     id: normalizeProductId(id),
+    productType: normalizeProductType(input.productType),
     createdAt: cleanLine(input.createdAt) || now.toISOString().slice(0, 10),
     account: cleanLine(input.account),
     email: cleanLine(input.email),
@@ -593,6 +668,7 @@ function sanitizeProduct(input, id) {
     password: cleanLine(input.password),
     googleAuth: cleanLine(input.googleAuth),
     securityCode: cleanLine(input.securityCode),
+    smsLink: cleanLine(input.smsLink),
     vpsIp: cleanLine(input.vpsIp),
     vpsRemoteUrl: cleanLine(input.vpsRemoteUrl),
     vpsUsername: cleanLine(input.vpsUsername),
@@ -625,6 +701,29 @@ function sanitizeProduct(input, id) {
   };
 }
 
+function sanitizePurchaseExpense(input, id) {
+  const now = new Date();
+  const amountUsd = numberOrZero(input.amountUsd);
+  const exchangeRate = positiveNumberOrNull(input.exchangeRate) || 0;
+  const settlementStatus = input.settlementStatus === 'settled' ? 'settled' : 'unsettled';
+  const amountCny = Number((amountUsd * exchangeRate).toFixed(2));
+  return {
+    id: normalizeProductId(id),
+    purchaseDate: cleanLine(input.purchaseDate) || now.toISOString().slice(0, 10),
+    itemName: cleanLine(input.itemName).slice(0, 120),
+    quantityRemark: String(input.quantityRemark || '').slice(0, 200),
+    amountUsd,
+    exchangeRate,
+    amountCny,
+    settlementStatus,
+    settledAt: settlementStatus === 'settled'
+      ? cleanLine(input.settledAt) || now.toLocaleString('zh-CN', { hour12: false })
+      : '',
+    remark: String(input.remark || '').slice(0, 200),
+    updatedAt: now.toLocaleTimeString('zh-CN', { hour12: false })
+  };
+}
+
 function productDuplicateKey(product) {
   const createdDate = cleanLine(product.createdAt).slice(0, 10);
   if (!createdDate) return '';
@@ -632,10 +731,11 @@ function productDuplicateKey(product) {
   const account = cleanLine(product.account).toLowerCase();
   const email = cleanLine(product.email).toLowerCase();
   const phone = [cleanLine(product.phoneCode), cleanLine(product.phone)].filter(Boolean).join(' ').toLowerCase();
+  const smsLink = cleanLine(product.smsLink).toLowerCase();
   const vpsRemoteUrl = cleanLine(product.vpsRemoteUrl).toLowerCase();
-  const identity = [account, email, phone, vpsRemoteUrl].filter(Boolean).join('|');
+  const identity = [account, email, phone, smsLink, vpsRemoteUrl].filter(Boolean).join('|');
 
-  return identity ? `${createdDate}|${identity}` : '';
+  return identity ? `${normalizeProductType(product.productType)}|${createdDate}|${identity}` : '';
 }
 
 function mergeDuplicateProduct(base, duplicate) {
@@ -646,8 +746,10 @@ function mergeDuplicateProduct(base, duplicate) {
     'phoneCode',
     'phone',
     'password',
+    'productType',
     'googleAuth',
     'securityCode',
+    'smsLink',
     'vpsIp',
     'vpsRemoteUrl',
     'vpsUsername',
@@ -719,6 +821,10 @@ function sanitizeCost(item, index) {
 function normalizeProductId(value) {
   const number = Number(value);
   return Number.isFinite(number) && String(value).trim() !== '' ? number : cleanLine(value);
+}
+
+function normalizeProductType(value) {
+  return value === 'appleDeveloper' ? 'appleDeveloper' : 'googleDeveloper';
 }
 
 function numberOrZero(value) {

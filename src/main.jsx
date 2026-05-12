@@ -28,6 +28,7 @@ import {
   Plus,
   Power,
   RefreshCw,
+  ReceiptText,
   Search,
   Send,
   Settings,
@@ -57,7 +58,25 @@ import './styles.css';
 
 const defaultExchangeRate = 6.84;
 const exchangeRateSource = 'Frankfurter';
-const defaultCostLabels = ['账号成本', 'VPS', 'ESIM', '写卡器', '其他成本'];
+const businessTypes = [
+  {
+    id: 'googleDeveloper',
+    label: '谷歌开发者',
+    shortLabel: '谷歌',
+    navId: 'products-google',
+    costLabels: ['账号成本', 'VPS', 'ESIM', '写卡器', '其他成本'],
+    pushFields: ['account', 'password', 'phone', 'email', 'securityCode', 'vpsRemoteUrl', 'googleAuth', 'vpsUsername', 'vpsPassword', 'vpsIp', 'remark']
+  },
+  {
+    id: 'appleDeveloper',
+    label: '苹果开发者',
+    shortLabel: '苹果',
+    navId: 'products-apple',
+    costLabels: ['账号成本', 'ESIM', '写卡器', '其他成本'],
+    pushFields: ['account', 'password', 'email', 'phone', 'smsLink', 'remark']
+  }
+];
+const defaultBusinessType = businessTypes[0].id;
 const costOwners = {
   hongKong: 'hongKong',
   wuhan: 'wuhan'
@@ -68,6 +87,7 @@ const pushFieldOptions = [
   { key: 'password', label: '密码', placeholder: '{password}' },
   { key: 'phone', label: '绑定手机号', placeholder: '{phone}' },
   { key: 'email', label: '绑定邮箱', placeholder: '{email}' },
+  { key: 'smsLink', label: '接码链接', placeholder: '{smsLink}' },
   { key: 'securityCode', label: '设备安全码', placeholder: '{securityCode}' },
   { key: 'vpsRemoteUrl', label: 'VPS登录链接', placeholder: '{vpsRemoteUrl}' },
   { key: 'googleAuth', label: 'Google 验证', placeholder: '{googleAuth}' },
@@ -78,10 +98,32 @@ const pushFieldOptions = [
 ];
 const defaultPushTemplateFields = ['account', 'password', 'phone', 'email', 'securityCode', 'vpsRemoteUrl'];
 
-function createPushFormat(fields = defaultPushTemplateFields) {
+function businessTypeConfig(productType) {
+  return businessTypes.find((item) => item.id === productType) || businessTypes[0];
+}
+
+function productBusinessType(product) {
+  return businessTypeConfig(product?.productType).id;
+}
+
+function businessTypeFromPage(page) {
+  return businessTypes.find((item) => item.navId === page)?.id || defaultBusinessType;
+}
+
+function pushOptionsForType(productType) {
+  const allowed = new Set(businessTypeConfig(productType).pushFields);
+  return pushFieldOptions.filter((item) => allowed.has(item.key));
+}
+
+function defaultPushFieldsForType(productType) {
+  return pushOptionsForType(productType).slice(0, productType === 'appleDeveloper' ? 6 : 6).map((item) => item.key);
+}
+
+function createPushFormat(fields = defaultPushTemplateFields, productType = defaultBusinessType) {
+  const options = pushOptionsForType(productType);
   return fields
     .map((fieldKey) => {
-      const field = pushFieldOptions.find((item) => item.key === fieldKey);
+      const field = options.find((item) => item.key === fieldKey);
       return field ? `${field.label}：${field.placeholder}` : '';
     })
     .filter(Boolean)
@@ -91,10 +133,18 @@ function createPushFormat(fields = defaultPushTemplateFields) {
 const defaultPushTemplates = [
   {
     id: 'list-default',
-    name: '列表页信息推送',
-    scene: 'products',
+    name: '谷歌开发者信息推送',
+    scene: 'googleDeveloper',
     fields: defaultPushTemplateFields,
     format: createPushFormat(defaultPushTemplateFields),
+    active: true
+  },
+  {
+    id: 'apple-default',
+    name: '苹果开发者信息推送',
+    scene: 'appleDeveloper',
+    fields: defaultPushFieldsForType('appleDeveloper'),
+    format: createPushFormat(defaultPushFieldsForType('appleDeveloper'), 'appleDeveloper'),
     active: true
   }
 ];
@@ -144,8 +194,8 @@ function openRangePicker(event, fromInput, toInput) {
   openNativePicker(event.clientX < left + width / 2 ? fromInput : toInput);
 }
 
-function createBlankCosts() {
-  return defaultCostLabels.map((label, index) => ({
+function createBlankCosts(productType = defaultBusinessType) {
+  return businessTypeConfig(productType).costLabels.map((label, index) => ({
     id: index + 1,
     label,
     amount: '',
@@ -154,9 +204,10 @@ function createBlankCosts() {
   }));
 }
 
-function createBlankProduct() {
+function createBlankProduct(productType = defaultBusinessType) {
   return {
     id: '',
+    productType: businessTypeConfig(productType).id,
     createdAt: localDateInput(),
     account: '',
     email: '',
@@ -165,12 +216,13 @@ function createBlankProduct() {
     password: '',
     googleAuth: '',
     securityCode: '',
+    smsLink: '',
     vpsIp: '',
     vpsRemoteUrl: '',
     vpsUsername: '',
     vpsPassword: '',
     remark: '',
-    costs: createBlankCosts(),
+    costs: createBlankCosts(productType),
     salePrice: 0,
     saleTime: '',
     isSold: false,
@@ -412,6 +464,36 @@ function settlementStatusLabel(product) {
   return product.settlementStatus === 'settled' ? '已结算' : '未结算';
 }
 
+function createBlankPurchaseExpense(rate = defaultExchangeRate) {
+  return {
+    id: `draft-expense-${Date.now()}`,
+    purchaseDate: localDateInput(),
+    itemName: '',
+    quantityRemark: '',
+    amountUsd: '',
+    exchangeRate: normalizeExchangeRate(rate),
+    amountCny: 0,
+    settlementStatus: 'unsettled',
+    settledAt: '',
+    remark: '',
+    updatedAt: ''
+  };
+}
+
+function purchaseExpenseCny(expense) {
+  const stored = Number(expense?.amountCny);
+  if (Number.isFinite(stored) && stored > 0) return stored;
+  return Number((Number(expense?.amountUsd || 0) * normalizeExchangeRate(expense?.exchangeRate)).toFixed(2));
+}
+
+function purchaseExpenseStatusLabel(expense) {
+  return expense?.settlementStatus === 'settled' ? '已结算' : '未结算';
+}
+
+function purchaseExpenseDateValue(expense) {
+  return String(expense?.purchaseDate || '').slice(0, 10);
+}
+
 function productDateValue(product) {
   return String(product.createdAt || '').slice(0, 10);
 }
@@ -545,17 +627,27 @@ async function apiJson(url, options = {}) {
 
 function normalizePushTemplates(value) {
   const templates = Array.isArray(value) && value.length ? value : defaultPushTemplates;
-  return templates.map((template, index) => {
-    const fields = Array.isArray(template.fields) && template.fields.length ? template.fields : defaultPushTemplateFields;
+  const normalized = templates.map((template, index) => {
+    const scene = template.scene === 'products' ? defaultBusinessType : businessTypeConfig(template.scene).id;
+    const fieldOptions = pushOptionsForType(scene);
+    const fieldKeys = new Set(fieldOptions.map((item) => item.key));
+    const fallbackFields = defaultPushFieldsForType(scene);
+    const fields = (Array.isArray(template.fields) && template.fields.length ? template.fields : fallbackFields)
+      .filter((field) => fieldKeys.has(field));
     return {
       id: template.id || `push-${Date.now()}-${index}`,
-      name: template.name || '列表页信息推送',
-      scene: template.scene || 'products',
-      fields,
-      format: template.format || createPushFormat(fields),
+      name: template.name || `${businessTypeConfig(scene).label}信息推送`,
+      scene,
+      fields: fields.length ? fields : fallbackFields,
+      format: template.format || createPushFormat(fields.length ? fields : fallbackFields, scene),
       active: Boolean(template.active)
     };
   });
+  const scenes = new Set(normalized.map((template) => template.scene));
+  return [
+    ...normalized,
+    ...defaultPushTemplates.filter((template) => !scenes.has(template.scene))
+  ];
 }
 
 function readStoredPushTemplates() {
@@ -586,11 +678,13 @@ function formatPhoneNumber(phoneCode, phone) {
 }
 
 function buildProductPushMessage(product, template = defaultPushTemplates[0]) {
-  const fields = Array.isArray(template.fields) && template.fields.length ? template.fields : defaultPushTemplateFields;
-  const format = template.format || createPushFormat(fields);
+  const productType = productBusinessType(product);
+  const options = pushOptionsForType(productType);
+  const fields = Array.isArray(template.fields) && template.fields.length ? template.fields : defaultPushFieldsForType(productType);
+  const format = template.format || createPushFormat(fields, productType);
   return pushFieldOptions.reduce((message, field) => {
     return message.replaceAll(field.placeholder, cleanMessageValue(productPushValue(product, field.key)));
-  }, format);
+  }, format || createPushFormat(options.map((item) => item.key), productType));
 }
 
 function cleanMessageValue(value) {
@@ -598,11 +692,16 @@ function cleanMessageValue(value) {
 }
 
 function App() {
-  const [page, setPageState] = useState(() => window.location.hash.replace('#/', '') || 'dashboard');
+  const [page, setPageState] = useState(() => {
+    const hashPage = window.location.hash.replace('#/', '') || 'dashboard';
+    return hashPage === 'products' ? businessTypes[0].navId : hashPage;
+  });
   const [products, setProducts] = useState(initialProducts);
+  const [purchaseExpenses, setPurchaseExpenses] = useState([]);
   const [activeId, setActiveId] = useState(initialProducts[0]?.id || 1);
   const [draftProduct, setDraftProduct] = useState(null);
   const [productSync, setProductSync] = useState({ loading: false, saving: false, message: '' });
+  const [purchaseExpenseSync, setPurchaseExpenseSync] = useState({ loading: false, saving: false, message: '' });
   const [pushTemplates, setPushTemplates] = useState(readStoredPushTemplates);
   const [deviceId] = useState(getDeviceId);
   const [authState, setAuthState] = useState({ loading: true, authenticated: false, user: null, pendingRequestId: '' });
@@ -631,14 +730,16 @@ function App() {
     }
   };
   const listPushTemplate = useMemo(() => {
-    return pushTemplates.find((item) => item.scene === 'products' && item.active)
-      || pushTemplates.find((item) => item.scene === 'products')
+    return (productType) => pushTemplates.find((item) => item.scene === productType && item.active)
+      || pushTemplates.find((item) => item.scene === productType)
+      || defaultPushTemplates.find((item) => item.scene === productType)
       || defaultPushTemplates[0];
   }, [pushTemplates]);
 
   useEffect(() => {
     const handleHashChange = () => {
-      setPageState(window.location.hash.replace('#/', '') || 'dashboard');
+      const nextPage = window.location.hash.replace('#/', '') || 'dashboard';
+      setPageState(nextPage === 'products' ? businessTypes[0].navId : nextPage);
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -721,6 +822,25 @@ function App() {
   useEffect(() => {
     if (!authState.authenticated) return;
     let cancelled = false;
+    setPurchaseExpenseSync((current) => ({ ...current, loading: true, message: '' }));
+    apiJson('/api/purchase-expenses')
+      .then((data) => {
+        if (cancelled) return;
+        setPurchaseExpenses(Array.isArray(data.expenses) ? data.expenses : []);
+        setPurchaseExpenseSync({ loading: false, saving: false, message: '' });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setPurchaseExpenseSync({ loading: false, saving: false, message: error.message || '代采购费用读取失败。' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.authenticated]);
+
+  useEffect(() => {
+    if (!authState.authenticated) return;
+    let cancelled = false;
     apiJson('/api/exchange-rate')
       .then((data) => {
         if (!cancelled) setExchangeRate(normalizeExchangeRate(data.rate));
@@ -733,11 +853,13 @@ function App() {
     };
   }, [authState.authenticated]);
 
-  const addProduct = () => {
+  const addProduct = (productType = defaultBusinessType) => {
     const now = new Date();
     const nextId = Math.max(...products.map((item) => item.id), 0) + 1;
+    const normalizedType = businessTypeConfig(productType).id;
     const nextProduct = {
       id: nextId,
+      productType: normalizedType,
       createdAt: localDateInput(now),
       account: `new_product_${nextId}`,
       email: '',
@@ -746,12 +868,13 @@ function App() {
       password: '',
       googleAuth: '',
       securityCode: '',
+      smsLink: '',
       vpsIp: '',
       vpsRemoteUrl: '',
       vpsUsername: '',
       vpsPassword: '',
       remark: '',
-      costs: createBlankCosts(),
+      costs: createBlankCosts(normalizedType),
       salePrice: 0,
       saleTime: '',
       isSold: false,
@@ -821,6 +944,49 @@ function App() {
       setProductSync({ loading: false, saving: false, message: `已清空产品数据，共删除 ${data.deleted || 0} 条。` });
     } catch (error) {
       setProductSync({ loading: false, saving: false, message: error.message || '清空产品数据失败，请稍后重试。' });
+    }
+  };
+
+  const savePurchaseExpense = async (expense) => {
+    setPurchaseExpenseSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const isDraft = String(expense.id).startsWith('draft-expense-');
+      const payload = { ...expense };
+      if (isDraft) delete payload.id;
+      const data = await apiJson(isDraft ? '/api/purchase-expenses' : `/api/purchase-expenses/${encodeURIComponent(expense.id)}`, {
+        method: isDraft ? 'POST' : 'PUT',
+        body: JSON.stringify(payload)
+      });
+      const savedExpense = data.expense;
+      setPurchaseExpenses((current) => {
+        const withoutDraft = current.filter((item) => item.id !== expense.id);
+        const exists = withoutDraft.some((item) => item.id === savedExpense.id);
+        return exists
+          ? withoutDraft.map((item) => item.id === savedExpense.id ? savedExpense : item)
+          : [savedExpense, ...withoutDraft];
+      });
+      setPurchaseExpenseSync({ loading: false, saving: false, message: '代采购费用已保存。' });
+      return { ok: true, expense: savedExpense };
+    } catch (error) {
+      const message = error.message || '代采购费用保存失败，请稍后重试。';
+      setPurchaseExpenseSync({ loading: false, saving: false, message });
+      return { ok: false, message };
+    }
+  };
+
+  const deletePurchaseExpense = async (expense) => {
+    const confirmed = window.confirm(`确定删除代采购费用「${expense.itemName || expense.id}」吗？`);
+    if (!confirmed) return { ok: false, cancelled: true };
+    setPurchaseExpenseSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      await apiJson(`/api/purchase-expenses/${encodeURIComponent(expense.id)}`, { method: 'DELETE' });
+      setPurchaseExpenses((current) => current.filter((item) => item.id !== expense.id));
+      setPurchaseExpenseSync({ loading: false, saving: false, message: '代采购费用已删除。' });
+      return { ok: true };
+    } catch (error) {
+      const message = error.message || '代采购费用删除失败，请稍后重试。';
+      setPurchaseExpenseSync({ loading: false, saving: false, message });
+      return { ok: false, message };
     }
   };
 
@@ -895,21 +1061,38 @@ function App() {
             <button className="link-button" type="button" onClick={() => setPage('settings')}>去系统设置</button>
           </div>
         )}
-        {page === 'dashboard' && <Dashboard products={products} exchangeRate={exchangeRate} onOpenProducts={() => setPage('products')} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
-        {page === 'products' && (
-          <ProductsPage
-            products={products}
-            exchangeRate={exchangeRate}
-            pushTemplate={listPushTemplate}
-            onAddProduct={addProduct}
-            onOpenWorkbench={(id) => {
-              setActiveId(id);
-              setPage('workbench');
-            }}
-          />
-        )}
+        {page === 'dashboard' && <Dashboard products={products} exchangeRate={exchangeRate} onOpenProducts={() => setPage(businessTypes[0].navId)} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
+        {businessTypes.some((item) => item.navId === page) && (() => {
+          const productType = businessTypeFromPage(page);
+          const visibleProducts = products.filter((item) => productBusinessType(item) === productType);
+          return (
+            <ProductsPage
+              productType={productType}
+              title={businessTypeConfig(productType).label}
+              products={visibleProducts}
+              exchangeRate={exchangeRate}
+              pushTemplate={listPushTemplate(productType)}
+              onAddProduct={() => addProduct(productType)}
+              onOpenWorkbench={(id) => {
+                setActiveId(id);
+                setPage('workbench');
+              }}
+            />
+          );
+        })()}
         {page === 'account-details' && <AccountDetailsPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
         {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
+        {page === 'purchase-expenses' && (
+          <PurchaseExpensesPage
+            expenses={purchaseExpenses}
+            exchangeRate={exchangeRate}
+            loading={purchaseExpenseSync.loading}
+            saving={purchaseExpenseSync.saving}
+            onSaveExpense={savePurchaseExpense}
+            onDeleteExpense={deletePurchaseExpense}
+          />
+        )}
+        {purchaseExpenseSync.message && <div className="global-notice"><Info size={15} />{purchaseExpenseSync.message}</div>}
         {page === 'workbench' && activeProduct && (
           <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} saving={productSync.saving} />
         )}
@@ -1035,8 +1218,9 @@ function Sidebar({ current, onChange, user, pendingLoginCount }) {
   const isSuperAdmin = user?.role === 'super_admin';
   const nav = [
     { id: 'dashboard', label: '首页', icon: Home },
-    { id: 'products', label: '产品列表', icon: ClipboardList },
+    ...businessTypes.map((item) => ({ id: item.navId, label: item.label, icon: ClipboardList })),
     { id: 'account-details', label: '账号详情', icon: UserRound },
+    { id: 'purchase-expenses', label: '代采购费用', icon: ReceiptText },
     { id: 'push-settings', label: '推送设置', icon: Send },
     { id: 'settings', label: '系统设置', icon: Settings }
   ].filter((item) => item.id !== 'settings' || isSuperAdmin);
@@ -1214,18 +1398,19 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
         </Panel>
         <Panel title="最近产品记录" action={<button className="link-button" onClick={onOpenProducts}>查看全部 <ChevronRight size={14} /></button>}>
           <table className="mini-table">
-            <thead><tr><th>ID</th><th>账号</th><th>状态</th><th>利润 (USD)</th><th>时间</th></tr></thead>
+            <thead><tr><th>ID</th><th>业务</th><th>账号</th><th>状态</th><th>利润 (USD)</th><th>时间</th></tr></thead>
             <tbody>
               {products.slice(0, 5).map((item) => (
                 <tr key={item.id} onClick={() => onOpenWorkbench(item.id)}>
                   <td>#{`20240427${String(item.id).padStart(2, '0')}`}</td>
+                  <td>{businessTypeConfig(productBusinessType(item)).shortLabel}</td>
                   <td>{item.account}</td>
                   <td><StatusBadge label={productStatus(item)} /></td>
                   <td>{money(Math.max(productProfit(item), 0))}</td>
                   <td>{item.updatedAt}</td>
                 </tr>
               ))}
-              {!products.length && <tr><td colSpan={5}>暂无产品记录</td></tr>}
+              {!products.length && <tr><td colSpan={6}>暂无产品记录</td></tr>}
             </tbody>
           </table>
         </Panel>
@@ -1325,7 +1510,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct }) {
+function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, title }) {
   const [keyword, setKeyword] = useState('');
   const [saleFilter, setSaleFilter] = useState('全部');
   const [paidFilter, setPaidFilter] = useState('全部');
@@ -1385,6 +1570,7 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
 
   return (
     <section className="page products-page">
+      <div className="page-title"><h1>{title}</h1><span>产品列表、推送与结算入口</span></div>
       <div className="kpi-grid five compact">
         <Kpi icon={Box} label="产品总数" value={String(products.length)} tone="purple" />
         <Kpi icon={ShoppingCart} label="待售" value={String(products.length - soldProducts.length)} tone="blue" />
@@ -1512,13 +1698,202 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
   );
 }
 
+function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveExpense, onDeleteExpense }) {
+  const [keyword, setKeyword] = useState('');
+  const [statusFilter, setStatusFilter] = useState('全部');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [draft, setDraft] = useState(null);
+  const [notice, setNotice] = useState('');
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter((item) => {
+      const keywordText = [item.itemName, item.quantityRemark, item.remark].join(' ').toLowerCase();
+      const matchesKeyword = keywordText.includes(keyword.toLowerCase());
+      const matchesStatus = statusFilter === '全部' || purchaseExpenseStatusLabel(item) === statusFilter;
+      const purchaseDate = purchaseExpenseDateValue(item);
+      const matchesDateFrom = !dateFrom || purchaseDate >= dateFrom;
+      const matchesDateTo = !dateTo || purchaseDate <= dateTo;
+      return matchesKeyword && matchesStatus && matchesDateFrom && matchesDateTo;
+    });
+  }, [expenses, keyword, statusFilter, dateFrom, dateTo]);
+  const unsettledExpenses = expenses.filter((item) => item.settlementStatus !== 'settled');
+  const settledExpenses = expenses.filter((item) => item.settlementStatus === 'settled');
+  const unsettledUsd = unsettledExpenses.reduce((sum, item) => sum + Number(item.amountUsd || 0), 0);
+  const unsettledCny = unsettledExpenses.reduce((sum, item) => sum + purchaseExpenseCny(item), 0);
+  const settledCny = settledExpenses.reduce((sum, item) => sum + purchaseExpenseCny(item), 0);
+
+  const startNewExpense = () => {
+    setDraft(createBlankPurchaseExpense(exchangeRate));
+    setNotice('');
+  };
+  const updateDraft = (patch) => {
+    setDraft((current) => {
+      const next = { ...(current || createBlankPurchaseExpense(exchangeRate)), ...patch };
+      const amountUsd = Number(next.amountUsd || 0);
+      const rate = normalizeExchangeRate(next.exchangeRate);
+      return {
+        ...next,
+        amountCny: Number((amountUsd * rate).toFixed(2))
+      };
+    });
+    setNotice('');
+  };
+  const saveDraft = async () => {
+    if (!draft?.itemName?.trim()) {
+      setNotice('请填写采购产品或事项名称。');
+      return;
+    }
+    if (Number(draft.amountUsd || 0) <= 0) {
+      setNotice('请填写大于 0 的 USD 支出金额。');
+      return;
+    }
+    if (Number(draft.exchangeRate || 0) <= 0) {
+      setNotice('请填写大于 0 的 USD/CNY 汇率。');
+      return;
+    }
+    const result = await onSaveExpense(draft);
+    if (!result.ok) {
+      setNotice(result.message || '保存失败，请稍后重试。');
+      return;
+    }
+    setDraft(null);
+    setNotice('代采购费用已保存。');
+  };
+  const editExpense = (expense) => {
+    setDraft({ ...expense });
+    setNotice('');
+  };
+  const markSettled = async (expense) => {
+    const result = await onSaveExpense({
+      ...expense,
+      settlementStatus: 'settled',
+      settledAt: new Date().toLocaleString('zh-CN', { hour12: false })
+    });
+    setNotice(result.ok ? '已标记为已结算。' : result.message || '结算状态保存失败。');
+  };
+  const resetFilters = () => {
+    setKeyword('');
+    setStatusFilter('全部');
+    setDateFrom('');
+    setDateTo('');
+  };
+
+  return (
+    <section className="page purchase-expenses-page">
+      <div className="page-title"><h1>代采购费用</h1><span>香港替武汉采购产生的独立往来款记录</span></div>
+      <div className="kpi-grid four compact">
+        <Kpi icon={DollarSign} label="未结算 USD" value={money(unsettledUsd)} tone="orange" />
+        <Kpi icon={WalletCards} label="未结算 CNY" value={cny(unsettledCny)} tone="purple" />
+        <Kpi icon={ShieldCheck} label="已结算 CNY" value={cny(settledCny)} tone="green" />
+        <Kpi icon={ReceiptText} label="费用记录" value={`${expenses.length} 笔`} tone="blue" />
+      </div>
+      {notice && <div className="inline-notice purchase-notice"><Info size={15} />{notice}</div>}
+      <div className="purchase-expenses-layout">
+        <Panel
+          className="purchase-expenses-list"
+          title="费用明细"
+          hint={loading ? '正在读取费用记录...' : '不计入产品利润和产品结算'}
+          action={<button className="primary-button" type="button" onClick={startNewExpense}><Plus size={16} /> 新增费用</button>}
+        >
+          <div className="filters purchase-filters">
+            <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索产品 / 数量 / 备注" /></label>
+            <FilterSelect label="结算状态" value={statusFilter} onChange={setStatusFilter} options={['全部', '未结算', '已结算']} />
+            <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
+            <div className="filters-actions single">
+              <button className="secondary-button" type="button" onClick={resetFilters}>重置</button>
+            </div>
+          </div>
+          {!expenses.length ? (
+            <EmptyState icon={ReceiptText} title="暂无代采购费用" text="新增费用后，武汉可在这里查看采购日期、USD 支出、折合人民币和结算状态。" />
+          ) : !filteredExpenses.length ? (
+            <EmptyState icon={Search} title="没有匹配结果" text="换一个关键词，或清空日期和结算状态筛选条件。" />
+          ) : (
+            <div className="purchase-table-wrap">
+              <table className="product-table purchase-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>采购日期</th>
+                    <th>采购产品/事项</th>
+                    <th>数量/备注</th>
+                    <th>USD 支出</th>
+                    <th>汇率</th>
+                    <th>CNY 金额</th>
+                    <th>结算状态</th>
+                    <th>结算时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredExpenses.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.id}</td>
+                      <td>{purchaseExpenseDateValue(item)}</td>
+                      <td>{item.itemName}</td>
+                      <td>{item.quantityRemark || item.remark || '-'}</td>
+                      <td>{money(item.amountUsd)}</td>
+                      <td>{Number(item.exchangeRate || 0).toFixed(4)}</td>
+                      <td>{cny(purchaseExpenseCny(item))}</td>
+                      <td><StatusBadge label={purchaseExpenseStatusLabel(item)} /></td>
+                      <td>{item.settledAt || '-'}</td>
+                      <td className="actions">
+                        <button type="button" onClick={() => editExpense(item)}>编辑</button>
+                        {item.settlementStatus !== 'settled' && <button type="button" onClick={() => markSettled(item)}>结清</button>}
+                        <button type="button" onClick={() => onDeleteExpense(item)}>删除</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+        <Panel className="purchase-editor-panel" title={draft ? (String(draft.id).startsWith('draft-expense-') ? '新增费用' : `编辑费用 #${draft.id}`) : '录入区'} hint="保存时锁定 USD/CNY 折算金额">
+          {draft ? (
+            <div className="purchase-editor">
+              <Input label="采购日期" type="date" value={draft.purchaseDate} icon={Calendar} onChange={(value) => updateDraft({ purchaseDate: value })} />
+              <Input label="采购产品/事项" value={draft.itemName} onChange={(value) => updateDraft({ itemName: value })} />
+              <Input label="数量或备注" value={draft.quantityRemark} onChange={(value) => updateDraft({ quantityRemark: value })} />
+              <Input label="支出金额 USD" type="number" value={draft.amountUsd} onChange={(value) => updateDraft({ amountUsd: value })} />
+              <Input label="USD/CNY 汇率" type="number" value={draft.exchangeRate} onChange={(value) => updateDraft({ exchangeRate: value })} />
+              <div className="purchase-cny-preview">
+                <span>折合人民币</span>
+                <strong>{cny(purchaseExpenseCny(draft))}</strong>
+              </div>
+              <label className="input-label">
+                <span>结算状态</span>
+                <select className="plain-select" value={draft.settlementStatus} onChange={(event) => updateDraft({
+                  settlementStatus: event.target.value,
+                  settledAt: event.target.value === 'settled' ? draft.settledAt || new Date().toLocaleString('zh-CN', { hour12: false }) : ''
+                })}>
+                  <option value="unsettled">未结算</option>
+                  <option value="settled">已结算</option>
+                </select>
+              </label>
+              <Textarea label="备注" value={draft.remark} onChange={(value) => updateDraft({ remark: value })} />
+              <div className="purchase-editor-actions">
+                <button className="secondary-button" type="button" onClick={() => setDraft(null)}>取消</button>
+                <button className="primary-button" type="button" disabled={saving} onClick={saveDraft}><Save size={16} />{saving ? '保存中...' : '保存费用'}</button>
+              </div>
+            </div>
+          ) : (
+            <div className="purchase-editor-empty">
+              <ReceiptText size={30} />
+              <strong>选择一条费用编辑，或新增一笔代采购记录。</strong>
+              <span>默认使用当前 USD/CNY 汇率，保存前可以手动修改。</span>
+            </div>
+          )}
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
 function AccountDetailsPage({ products, onSaveProduct, saving }) {
   const [activeId, setActiveId] = useState(products[0]?.id || '');
-  const [draftText, setDraftText] = useState('');
+  const [detailDraft, setDetailDraft] = useState({ accountType: '', accountCountry: '', accountInfo: '' });
   const [notice, setNotice] = useState('');
   const activeProduct = products.find((item) => item.id === activeId) || products[0] || null;
-  const parsedPatch = useMemo(() => accountInfoPatch(draftText), [draftText]);
-  const formattedPreview = parsedPatch.accountInfoFormatted;
 
   useEffect(() => {
     if (!products.length) {
@@ -1529,7 +1904,11 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
   }, [products]);
 
   useEffect(() => {
-    setDraftText(activeProduct?.accountInfoRaw || activeProduct?.accountInfoFormatted || '');
+    setDetailDraft({
+      accountType: activeProduct?.accountType || '',
+      accountCountry: activeProduct?.accountCountry || '',
+      accountInfo: activeProduct?.accountInfoRaw || activeProduct?.accountInfoFormatted || ''
+    });
     setNotice('');
   }, [activeProduct?.id]);
 
@@ -1541,20 +1920,28 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
   };
 
   const updateAccountType = (product, accountType) => {
+    if (activeProduct?.id === product.id) {
+      setDetailDraft((current) => ({ ...current, accountType }));
+    }
     saveAccountPatch(product, { accountType }, '账号类型已同步。');
   };
 
-  const applyConverter = () => {
-    if (!activeProduct || !draftText.trim()) {
-      setNotice('请先选择账号并粘贴需要转换的信息。');
+  const saveAccountDetails = () => {
+    if (!activeProduct) {
+      setNotice('请先选择账号。');
       return;
     }
-    saveAccountPatch(activeProduct, parsedPatch, '已转换并同步创建时间、国家和账号信息。');
+    saveAccountPatch(activeProduct, {
+      accountType: detailDraft.accountType,
+      accountCountry: detailDraft.accountCountry,
+      accountInfoRaw: detailDraft.accountInfo,
+      accountInfoFormatted: detailDraft.accountInfo
+    });
   };
 
   return (
     <section className="page account-details-page">
-      <div className="page-title"><h1>账号详情</h1><span>与产品列表同步的账号资料和文本转换器</span></div>
+      <div className="page-title"><h1>账号详情</h1><span>与产品基础信息同步的账号资料</span></div>
       {notice && <div className="inline-notice"><Info size={15} />{notice}</div>}
       <div className="account-details-grid">
         <Panel className="account-table-panel" title="账号资料" hint="新增产品会自动出现在这里">
@@ -1562,12 +1949,12 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
             <table className="product-table account-detail-table">
               <thead>
                 <tr>
+                  <th>业务</th>
                   <th>上架时间</th>
                   <th>账号</th>
                   <th>创建时间</th>
                   <th>账号类型</th>
                   <th>国家</th>
-                  <th>号码时常</th>
                   <th>账号成本</th>
                   <th>账号信息</th>
                 </tr>
@@ -1575,6 +1962,7 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
               <tbody>
                 {products.map((product) => (
                   <tr key={product.id} className={activeProduct?.id === product.id ? 'selected-row' : ''} onClick={() => setActiveId(product.id)}>
+                    <td>{businessTypeConfig(productBusinessType(product)).shortLabel}</td>
                     <td>{productDateValue(product)}</td>
                     <td><CopyableAccountCell value={product.account || product.email} /></td>
                     <td>{monthLabel(product.accountCreationDate) || '-'}</td>
@@ -1592,9 +1980,8 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
                       </select>
                     </td>
                     <td>{product.accountCountry || '-'}</td>
-                    <td>{accountAgeMonths(product) || '-'}</td>
                     <td>{money(accountCost(product))}</td>
-                    <td className="account-info-cell">{product.accountInfoFormatted || '-'}</td>
+                    <td className="account-info-cell">{product.accountInfoRaw || product.accountInfoFormatted || '-'}</td>
                   </tr>
                 ))}
                 {!products.length && <tr><td colSpan={8}>暂无产品记录</td></tr>}
@@ -1603,21 +1990,33 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
           </div>
         </Panel>
 
-        <Panel className="converter-panel" title="文本格式转换器" hint={activeProduct ? `当前账号：${activeProduct.account || activeProduct.email || `#${activeProduct.id}`}` : '请选择账号'}>
+        <Panel className="account-edit-panel" title="账号信息" hint={activeProduct ? `当前账号：${activeProduct.account || activeProduct.email || `#${activeProduct.id}`}` : '请选择账号'}>
+          <label className="input-label">
+            <span>账号类型</span>
+            <div className="input-shell">
+              <select value={detailDraft.accountType} disabled={saving || !activeProduct} onChange={(event) => setDetailDraft({ ...detailDraft, accountType: event.target.value })}>
+                <option value="">未选择</option>
+                <option value="enterprise">企业</option>
+                <option value="personal">个人</option>
+              </select>
+            </div>
+          </label>
+          <Input label="国家" value={detailDraft.accountCountry} disabled={saving || !activeProduct} onChange={(value) => setDetailDraft({ ...detailDraft, accountCountry: value })} />
           <textarea
             className="converter-input"
-            value={draftText}
-            onChange={(event) => setDraftText(event.target.value)}
-            placeholder="粘贴 Creation Date、Country、Google Play 链接等信息"
+            value={detailDraft.accountInfo}
+            disabled={saving || !activeProduct}
+            onChange={(event) => setDetailDraft({ ...detailDraft, accountInfo: event.target.value })}
+            placeholder="粘贴或修改账号信息"
           />
-          <div className="converter-preview">
-            <strong>转换预览</strong>
-            <pre>{formattedPreview || '等待输入信息'}</pre>
-          </div>
           <div className="converter-actions">
-            <button className="secondary-button" type="button" onClick={() => setDraftText(activeProduct?.accountInfoRaw || '')}>恢复当前账号信息</button>
-            <button className="primary-button" type="button" disabled={saving || !activeProduct} onClick={applyConverter}>
-              <Save size={16} />{saving ? '保存中...' : '转换并同步'}
+            <button className="secondary-button" type="button" disabled={!activeProduct} onClick={() => setDetailDraft({
+              accountType: activeProduct?.accountType || '',
+              accountCountry: activeProduct?.accountCountry || '',
+              accountInfo: activeProduct?.accountInfoRaw || activeProduct?.accountInfoFormatted || ''
+            })}>恢复当前账号信息</button>
+            <button className="primary-button" type="button" disabled={saving || !activeProduct} onClick={saveAccountDetails}>
+              <Save size={16} />{saving ? '保存中...' : '保存账号信息'}
             </button>
           </div>
         </Panel>
@@ -1669,6 +2068,8 @@ function Workbench({ product, user, onSave, saving }) {
   const settlement = settlementAmounts(draft);
   const canEditCredentials = user?.role === 'super_admin';
   const isNewProduct = String(draft.id).startsWith('draft-');
+  const business = businessTypeConfig(productBusinessType(draft));
+  const isAppleDeveloper = business.id === 'appleDeveloper';
 
   useEffect(() => {
     setDraft(product);
@@ -1777,7 +2178,7 @@ function Workbench({ product, user, onSave, saving }) {
     <section className="page workbench-page">
       <div className="workbench-toolbar">
         <div>
-          <strong>{isNewProduct ? '新增产品草稿' : `产品 #${draft.id}`}</strong>
+          <strong>{isNewProduct ? `新增${business.label}草稿` : `${business.label} #${draft.id}`}</strong>
           <span>{dirty ? '有未保存改动' : '已保存'}</span>
         </div>
         <button className="primary-button" type="button" disabled={saving || (!dirty && !isNewProduct)} onClick={saveDraft}>
@@ -1792,19 +2193,31 @@ function Workbench({ product, user, onSave, saving }) {
             icon={FileText}
             subtitle="填写产品基础信息，为后续流程提供准备"
           >
-            {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、Google 验证、设备安全码、VPS 密码仅超级管理员可修改。</div>}
+            {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、Google 验证、设备安全码、VPS 密码等敏感凭据仅超级管理员可修改。</div>}
             <div className="form-grid">
               <Input label="上架时间" type="date" value={productDateValue(draft) || localDateInput()} icon={Calendar} onChange={(value) => updateField('createdAt', value)} />
+              <Input label="账号" value={draft.account} onChange={(value) => updateField('account', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
               <Input label="绑定邮箱" value={draft.email} onChange={(value) => updateField('email', value)} />
               <PhoneInput product={draft} onChange={(patch) => commitChange(patch)} />
-              <Input label="账号" value={draft.account} onChange={(value) => updateField('account', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="Google 验证" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="设备安全码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
-              <Input label="VPS 用户名" value={draft.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />
-              <SecretInput readOnly={!canEditCredentials} label="VPS 密码" value={draft.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} onOpenFull={openFullValue} />
-              <Input label="VPS IP" value={draft.vpsIp} copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsIp', value)} />
-              <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />
+              {isAppleDeveloper && <Input label="接码链接" value={draft.smsLink} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('smsLink', value)} />}
+              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="Google 验证" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />}
+              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="设备安全码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />}
+              {!isAppleDeveloper && <Input label="VPS 用户名" value={draft.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />}
+              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="VPS 密码" value={draft.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} onOpenFull={openFullValue} />}
+              {!isAppleDeveloper && <Input label="VPS IP" value={draft.vpsIp} copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsIp', value)} />}
+              {!isAppleDeveloper && <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />}
+              <label className="input-label">
+                <span>账号类型</span>
+                <div className="input-shell">
+                  <select value={draft.accountType || ''} onChange={(event) => updateField('accountType', event.target.value)}>
+                    <option value="">未选择</option>
+                    <option value="enterprise">企业</option>
+                    <option value="personal">个人</option>
+                  </select>
+                </div>
+              </label>
+              <Input label="国家" value={draft.accountCountry} onChange={(value) => updateField('accountCountry', value)} />
               <Textarea label="备注" value={draft.remark} copyable onOpenFull={openFullValue} onChange={(value) => updateField('remark', value)} />
             </div>
           </Section>
@@ -2140,7 +2553,9 @@ function Panel({ title, hint, action, className = '', children }) {
 function PushSettingsPage({ products, templates, onChange }) {
   const [activeId, setActiveId] = useState(templates[0]?.id || defaultPushTemplates[0].id);
   const activeTemplate = templates.find((item) => item.id === activeId) || templates[0] || defaultPushTemplates[0];
-  const previewProduct = products[0] || createBlankProduct();
+  const activeBusiness = businessTypeConfig(activeTemplate.scene);
+  const activePushFields = pushOptionsForType(activeBusiness.id);
+  const previewProduct = products.find((item) => productBusinessType(item) === activeBusiness.id) || createBlankProduct(activeBusiness.id);
   const previewMessage = buildProductPushMessage(previewProduct, activeTemplate);
 
   useEffect(() => {
@@ -2153,12 +2568,14 @@ function PushSettingsPage({ products, templates, onChange }) {
     onChange((current) => current.map((item) => item.id === activeTemplate.id ? { ...item, ...patch } : item));
   };
   const addTemplate = () => {
+    const scene = businessTypes[0].id;
+    const fields = defaultPushFieldsForType(scene);
     const nextTemplate = {
       id: `push-${Date.now()}`,
-      name: '新的列表页推送',
-      scene: 'products',
-      fields: defaultPushTemplateFields,
-      format: createPushFormat(defaultPushTemplateFields),
+      name: `新的${businessTypeConfig(scene).label}推送`,
+      scene,
+      fields,
+      format: createPushFormat(fields, scene),
       active: false
     };
     onChange((current) => [...current, nextTemplate]);
@@ -2179,8 +2596,18 @@ function PushSettingsPage({ products, templates, onChange }) {
     const exists = activeTemplate.fields.includes(fieldKey);
     const fields = exists
       ? activeTemplate.fields.filter((item) => item !== fieldKey)
-      : pushFieldOptions.filter((item) => [...activeTemplate.fields, fieldKey].includes(item.key)).map((item) => item.key);
-    updateTemplate({ fields, format: createPushFormat(fields) });
+      : activePushFields.filter((item) => [...activeTemplate.fields, fieldKey].includes(item.key)).map((item) => item.key);
+    updateTemplate({ fields, format: createPushFormat(fields, activeBusiness.id) });
+  };
+  const updateScene = (scene) => {
+    const nextScene = businessTypeConfig(scene).id;
+    const fields = defaultPushFieldsForType(nextScene);
+    updateTemplate({
+      scene: nextScene,
+      fields,
+      format: createPushFormat(fields, nextScene),
+      name: activeTemplate.name.includes(activeBusiness.label) ? activeTemplate.name.replace(activeBusiness.label, businessTypeConfig(nextScene).label) : activeTemplate.name
+    });
   };
 
   return (
@@ -2201,7 +2628,7 @@ function PushSettingsPage({ products, templates, onChange }) {
                 onClick={() => setActiveId(template.id)}
               >
                 <strong>{template.name}</strong>
-                <span>{template.scene === 'products' ? '推送列表页' : '自定义场景'} · {template.fields.length} 个字段</span>
+                <span>推送{businessTypeConfig(template.scene).label} · {template.fields.length} 个字段</span>
                 {template.active && <b>当前使用</b>}
               </button>
             ))}
@@ -2214,15 +2641,15 @@ function PushSettingsPage({ products, templates, onChange }) {
             <label className="input-label">
               <span>使用场景</span>
               <div className="input-shell">
-                <select value={activeTemplate.scene} onChange={(event) => updateTemplate({ scene: event.target.value })}>
-                  <option value="products">推送列表页</option>
+                <select value={activeTemplate.scene} onChange={(event) => updateScene(event.target.value)}>
+                  {businessTypes.map((item) => <option key={item.id} value={item.id}>推送{item.label}</option>)}
                 </select>
               </div>
             </label>
             <div className="field-picker wide-settings">
               <span>选择推送信息</span>
               <div className="field-grid">
-                {pushFieldOptions.map((field) => (
+                {activePushFields.map((field) => (
                   <label className="checkbox-chip" key={field.key}>
                     <input type="checkbox" checked={activeTemplate.fields.includes(field.key)} onChange={() => toggleField(field.key)} />
                     <span>{field.label}</span>
@@ -2239,8 +2666,8 @@ function PushSettingsPage({ products, templates, onChange }) {
               />
             </label>
             <div className="push-actions wide-settings">
-              <button className="primary-button" onClick={setActiveForScene}><Save size={15} /> 设为列表页当前模板</button>
-              <button className="secondary-button" onClick={() => updateTemplate({ format: createPushFormat(activeTemplate.fields) })}>恢复字段默认格式</button>
+              <button className="primary-button" onClick={setActiveForScene}><Save size={15} /> 设为{activeBusiness.label}当前模板</button>
+              <button className="secondary-button" onClick={() => updateTemplate({ format: createPushFormat(activeTemplate.fields, activeBusiness.id) })}>恢复字段默认格式</button>
               <button className="danger-button" disabled={templates.length <= 1} onClick={deleteTemplate}><Trash2 size={14} /> 删除</button>
             </div>
             <div className="push-preview wide-settings">
