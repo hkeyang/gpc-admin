@@ -1925,7 +1925,7 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
                       <td>
                         {item.remark ? (
                           <button className="remark-toggle" type="button" onClick={() => setFullView({ label: `费用 #${item.id} 备注`, value: item.remark })}>
-                            {item.remark.length > 12 ? `${item.remark.slice(0, 12)}...` : item.remark}
+                            {item.remark.length > 5 ? `${item.remark.slice(0, 5)}...` : item.remark}
                           </button>
                         ) : '-'}
                       </td>

@@ -950,16 +950,19 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
 }
 .filters-actions.single { grid-template-columns: 1fr; min-width: 70px; }
 .purchase-table-wrap { width: 100%; overflow-x: auto; }
-.purchase-table { min-width: 980px; }
+.purchase-table { min-width: 820px; }
 .purchase-table th:nth-child(1), .purchase-table td:nth-child(1) { width: 44px; }
 .purchase-table th:nth-child(2), .purchase-table td:nth-child(2) { width: 94px; }
-.purchase-table th:nth-child(3), .purchase-table td:nth-child(3) { width: 170px; }
-.purchase-table th:nth-child(4), .purchase-table td:nth-child(4) { width: 64px; }
+.purchase-table th:nth-child(3), .purchase-table td:nth-child(3) { width: 124px; }
+.purchase-table th:nth-child(4), .purchase-table td:nth-child(4) { width: 42px; }
 .purchase-table th:nth-child(5), .purchase-table td:nth-child(5) { width: 92px; }
 .purchase-table th:nth-child(6), .purchase-table td:nth-child(6) { width: 82px; }
-.purchase-table th:nth-child(7), .purchase-table td:nth-child(7) { width: 142px; }
-.purchase-table th:nth-child(8), .purchase-table td:nth-child(8) { width: 150px; }
-.purchase-table th:nth-child(9), .purchase-table td:nth-child(9) { width: 116px; }
+.purchase-table th:nth-child(7), .purchase-table td:nth-child(7) { width: 112px; }
+.purchase-table th:nth-child(8), .purchase-table td:nth-child(8) { width: 70px; }
+.purchase-table th:nth-child(9), .purchase-table td:nth-child(9) { width: 92px; }
+.purchase-table th:nth-child(4), .purchase-table td:nth-child(4),
+.purchase-table th:nth-child(8), .purchase-table td:nth-child(8),
+.purchase-table th:nth-child(9), .purchase-table td:nth-child(9) { padding-left: 3px; padding-right: 3px; }
 .purchase-table td:nth-child(3),
 .purchase-table td:nth-child(4),
 .purchase-table td:nth-child(7),
@@ -968,7 +971,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   line-height: 1.45;
 }
 .remark-toggle {
-  max-width: 100%;
+  max-width: 58px;
   color: var(--purple);
   font-weight: 800;
   font-size: 10.5px;
