@@ -471,19 +471,26 @@ function createBlankPurchaseExpense(rate = defaultExchangeRate) {
     itemName: '',
     quantityRemark: '',
     amountUsd: '',
-    exchangeRate: normalizeExchangeRate(rate),
-    amountCny: 0,
     settlementStatus: 'unsettled',
+    settlementExchangeRate: null,
+    settlementAmountCny: null,
     settledAt: '',
     remark: '',
     updatedAt: ''
   };
 }
 
-function purchaseExpenseCny(expense) {
-  const stored = Number(expense?.amountCny);
-  if (Number.isFinite(stored) && stored > 0) return stored;
-  return Number((Number(expense?.amountUsd || 0) * normalizeExchangeRate(expense?.exchangeRate)).toFixed(2));
+function purchaseExpenseEstimatedCny(expense, rate = defaultExchangeRate) {
+  return Number((Number(expense?.amountUsd || 0) * normalizeExchangeRate(rate)).toFixed(2));
+}
+
+function purchaseExpenseSettledCny(expense, rate = defaultExchangeRate) {
+  const snapshot = Number(expense?.settlementAmountCny);
+  if (Number.isFinite(snapshot) && snapshot > 0) return snapshot;
+  const legacy = Number(expense?.amountCny);
+  if (Number.isFinite(legacy) && legacy > 0) return legacy;
+  const settledRate = normalizeExchangeRate(expense?.settlementExchangeRate || expense?.exchangeRate || rate);
+  return purchaseExpenseEstimatedCny(expense, settledRate);
 }
 
 function purchaseExpenseStatusLabel(expense) {
@@ -953,6 +960,8 @@ function App() {
       const isDraft = String(expense.id).startsWith('draft-expense-');
       const payload = { ...expense };
       if (isDraft) delete payload.id;
+      delete payload.exchangeRate;
+      delete payload.amountCny;
       const data = await apiJson(isDraft ? '/api/purchase-expenses' : `/api/purchase-expenses/${encodeURIComponent(expense.id)}`, {
         method: isDraft ? 'POST' : 'PUT',
         body: JSON.stringify(payload)
@@ -1698,6 +1707,62 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
   );
 }
 
+function PurchaseExchangeCard({ exchangeRate, unsettledUsd, onRateChange }) {
+  const [usdAmount, setUsdAmount] = useState('');
+  const [cnyAmount, setCnyAmount] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const normalizedRate = normalizeExchangeRate(exchangeRate);
+
+  const refreshRate = async () => {
+    setLoading(true);
+    setMessage('');
+    try {
+      const data = await apiJson(`/api/exchange-rate?t=${Date.now()}`);
+      const nextRate = normalizeExchangeRate(data.rate);
+      onRateChange(nextRate);
+      setMessage(data.date ? `${data.source || exchangeRateSource} · ${data.date}` : data.source || exchangeRateSource);
+      if (usdAmount !== '') {
+        const number = Number(usdAmount);
+        setCnyAmount(Number.isFinite(number) ? formatExchangeValue(number * nextRate) : '');
+      } else if (cnyAmount !== '') {
+        const number = Number(cnyAmount);
+        setUsdAmount(Number.isFinite(number) ? formatExchangeValue(number / nextRate) : '');
+      }
+    } catch (error) {
+      setMessage(error.message || '汇率刷新失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const updateUsdAmount = (value) => {
+    setUsdAmount(value);
+    const number = Number(value);
+    setCnyAmount(value === '' || !Number.isFinite(number) ? '' : formatExchangeValue(number * normalizedRate));
+  };
+  const updateCnyAmount = (value) => {
+    setCnyAmount(value);
+    const number = Number(value);
+    setUsdAmount(value === '' || !Number.isFinite(number) ? '' : formatExchangeValue(number / normalizedRate));
+  };
+
+  return (
+    <div className="purchase-rate-card">
+      <div className="purchase-rate-head">
+        <span>USD/CNY 汇率</span>
+        <button type="button" onClick={refreshRate} disabled={loading} aria-label="刷新 USD/CNY 汇率"><RefreshCw size={14} /></button>
+      </div>
+      <strong>{normalizedRate.toFixed(4)}</strong>
+      <em>未结算约 {cny(usdToCny(unsettledUsd, normalizedRate))}</em>
+      <div className="purchase-rate-inputs">
+        <label><span>USD</span><input type="number" min="0" value={usdAmount} onChange={(event) => updateUsdAmount(event.target.value)} /></label>
+        <label><span>CNY</span><input type="number" min="0" value={cnyAmount} onChange={(event) => updateCnyAmount(event.target.value)} /></label>
+      </div>
+      {message && <small>{message}</small>}
+    </div>
+  );
+}
+
 function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveExpense, onDeleteExpense }) {
   const [keyword, setKeyword] = useState('');
   const [statusFilter, setStatusFilter] = useState('全部');
@@ -1705,6 +1770,12 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
   const [dateTo, setDateTo] = useState('');
   const [draft, setDraft] = useState(null);
   const [notice, setNotice] = useState('');
+  const [fullView, setFullView] = useState(null);
+  const [liveExchangeRate, setLiveExchangeRate] = useState(normalizeExchangeRate(exchangeRate));
+  const normalizedExchangeRate = normalizeExchangeRate(liveExchangeRate);
+  useEffect(() => {
+    setLiveExchangeRate(normalizeExchangeRate(exchangeRate));
+  }, [exchangeRate]);
   const filteredExpenses = useMemo(() => {
     return expenses.filter((item) => {
       const keywordText = [item.itemName, item.quantityRemark, item.remark].join(' ').toLowerCase();
@@ -1719,23 +1790,15 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
   const unsettledExpenses = expenses.filter((item) => item.settlementStatus !== 'settled');
   const settledExpenses = expenses.filter((item) => item.settlementStatus === 'settled');
   const unsettledUsd = unsettledExpenses.reduce((sum, item) => sum + Number(item.amountUsd || 0), 0);
-  const unsettledCny = unsettledExpenses.reduce((sum, item) => sum + purchaseExpenseCny(item), 0);
-  const settledCny = settledExpenses.reduce((sum, item) => sum + purchaseExpenseCny(item), 0);
+  const unsettledCny = unsettledExpenses.reduce((sum, item) => sum + purchaseExpenseEstimatedCny(item, normalizedExchangeRate), 0);
+  const settledCny = settledExpenses.reduce((sum, item) => sum + purchaseExpenseSettledCny(item, normalizedExchangeRate), 0);
 
   const startNewExpense = () => {
     setDraft(createBlankPurchaseExpense(exchangeRate));
     setNotice('');
   };
   const updateDraft = (patch) => {
-    setDraft((current) => {
-      const next = { ...(current || createBlankPurchaseExpense(exchangeRate)), ...patch };
-      const amountUsd = Number(next.amountUsd || 0);
-      const rate = normalizeExchangeRate(next.exchangeRate);
-      return {
-        ...next,
-        amountCny: Number((amountUsd * rate).toFixed(2))
-      };
-    });
+    setDraft((current) => ({ ...(current || createBlankPurchaseExpense(exchangeRate)), ...patch }));
     setNotice('');
   };
   const saveDraft = async () => {
@@ -1747,11 +1810,25 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
       setNotice('请填写大于 0 的 USD 支出金额。');
       return;
     }
-    if (Number(draft.exchangeRate || 0) <= 0) {
-      setNotice('请填写大于 0 的 USD/CNY 汇率。');
-      return;
+    let payload = { ...draft };
+    if (payload.settlementStatus === 'settled' && Number(payload.settlementAmountCny || 0) <= 0) {
+      setNotice('正在获取最新汇率并结算...');
+      let latestRate = normalizedExchangeRate;
+      try {
+        const data = await apiJson(`/api/exchange-rate?t=${Date.now()}`);
+        latestRate = normalizeExchangeRate(data.rate);
+        setLiveExchangeRate(latestRate);
+      } catch {
+        latestRate = normalizedExchangeRate;
+      }
+      payload = {
+        ...payload,
+        settlementExchangeRate: latestRate,
+        settlementAmountCny: purchaseExpenseEstimatedCny(payload, latestRate),
+        settledAt: payload.settledAt || new Date().toLocaleString('zh-CN', { hour12: false })
+      };
     }
-    const result = await onSaveExpense(draft);
+    const result = await onSaveExpense(payload);
     if (!result.ok) {
       setNotice(result.message || '保存失败，请稍后重试。');
       return;
@@ -1764,9 +1841,20 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
     setNotice('');
   };
   const markSettled = async (expense) => {
+    setNotice('正在获取最新汇率并结算...');
+    let latestRate = normalizedExchangeRate;
+    try {
+      const data = await apiJson(`/api/exchange-rate?t=${Date.now()}`);
+      latestRate = normalizeExchangeRate(data.rate);
+      setLiveExchangeRate(latestRate);
+    } catch {
+      latestRate = normalizedExchangeRate;
+    }
     const result = await onSaveExpense({
       ...expense,
       settlementStatus: 'settled',
+      settlementExchangeRate: latestRate,
+      settlementAmountCny: purchaseExpenseEstimatedCny(expense, latestRate),
       settledAt: new Date().toLocaleString('zh-CN', { hour12: false })
     });
     setNotice(result.ok ? '已标记为已结算。' : result.message || '结算状态保存失败。');
@@ -1781,8 +1869,9 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
   return (
     <section className="page purchase-expenses-page">
       <div className="page-title"><h1>代采购费用</h1><span>香港替武汉采购产生的独立往来款记录</span></div>
-      <div className="kpi-grid four compact">
+      <div className="purchase-summary-grid">
         <Kpi icon={DollarSign} label="未结算 USD" value={money(unsettledUsd)} tone="orange" />
+        <PurchaseExchangeCard exchangeRate={normalizedExchangeRate} unsettledUsd={unsettledUsd} onRateChange={setLiveExchangeRate} />
         <Kpi icon={WalletCards} label="未结算 CNY" value={cny(unsettledCny)} tone="purple" />
         <Kpi icon={ShieldCheck} label="已结算 CNY" value={cny(settledCny)} tone="green" />
         <Kpi icon={ReceiptText} label="费用记录" value={`${expenses.length} 笔`} tone="blue" />
@@ -1804,7 +1893,7 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
             </div>
           </div>
           {!expenses.length ? (
-            <EmptyState icon={ReceiptText} title="暂无代采购费用" text="新增费用后，武汉可在这里查看采购日期、USD 支出、折合人民币和结算状态。" />
+            <EmptyState icon={ReceiptText} title="暂无代采购费用" text="新增费用后，武汉可在这里查看采购日期、USD 支出、实时人民币估算和结算状态。" />
           ) : !filteredExpenses.length ? (
             <EmptyState icon={Search} title="没有匹配结果" text="换一个关键词，或清空日期和结算状态筛选条件。" />
           ) : (
@@ -1815,12 +1904,11 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
                     <th>ID</th>
                     <th>采购日期</th>
                     <th>采购产品/事项</th>
-                    <th>数量/备注</th>
+                    <th>数量</th>
                     <th>USD 支出</th>
-                    <th>汇率</th>
-                    <th>CNY 金额</th>
                     <th>结算状态</th>
                     <th>结算时间</th>
+                    <th>备注</th>
                     <th>操作</th>
                   </tr>
                 </thead>
@@ -1830,12 +1918,17 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
                       <td>{item.id}</td>
                       <td>{purchaseExpenseDateValue(item)}</td>
                       <td>{item.itemName}</td>
-                      <td>{item.quantityRemark || item.remark || '-'}</td>
+                      <td>{item.quantityRemark || '-'}</td>
                       <td>{money(item.amountUsd)}</td>
-                      <td>{Number(item.exchangeRate || 0).toFixed(4)}</td>
-                      <td>{cny(purchaseExpenseCny(item))}</td>
                       <td><StatusBadge label={purchaseExpenseStatusLabel(item)} /></td>
                       <td>{item.settledAt || '-'}</td>
+                      <td>
+                        {item.remark ? (
+                          <button className="remark-toggle" type="button" onClick={() => setFullView({ label: `费用 #${item.id} 备注`, value: item.remark })}>
+                            {item.remark.length > 12 ? `${item.remark.slice(0, 12)}...` : item.remark}
+                          </button>
+                        ) : '-'}
+                      </td>
                       <td className="actions">
                         <button type="button" onClick={() => editExpense(item)}>编辑</button>
                         {item.settlementStatus !== 'settled' && <button type="button" onClick={() => markSettled(item)}>结清</button>}
@@ -1848,23 +1941,20 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
             </div>
           )}
         </Panel>
-        <Panel className="purchase-editor-panel" title={draft ? (String(draft.id).startsWith('draft-expense-') ? '新增费用' : `编辑费用 #${draft.id}`) : '录入区'} hint="保存时锁定 USD/CNY 折算金额">
+        <Panel className="purchase-editor-panel" title={draft ? (String(draft.id).startsWith('draft-expense-') ? '新增费用' : `编辑费用 #${draft.id}`) : '录入区'} hint="结清时按最新汇率锁定 CNY 金额">
           {draft ? (
             <div className="purchase-editor">
               <Input label="采购日期" type="date" value={draft.purchaseDate} icon={Calendar} onChange={(value) => updateDraft({ purchaseDate: value })} />
               <Input label="采购产品/事项" value={draft.itemName} onChange={(value) => updateDraft({ itemName: value })} />
-              <Input label="数量或备注" value={draft.quantityRemark} onChange={(value) => updateDraft({ quantityRemark: value })} />
+              <Input label="数量" value={draft.quantityRemark} onChange={(value) => updateDraft({ quantityRemark: value })} />
               <Input label="支出金额 USD" type="number" value={draft.amountUsd} onChange={(value) => updateDraft({ amountUsd: value })} />
-              <Input label="USD/CNY 汇率" type="number" value={draft.exchangeRate} onChange={(value) => updateDraft({ exchangeRate: value })} />
-              <div className="purchase-cny-preview">
-                <span>折合人民币</span>
-                <strong>{cny(purchaseExpenseCny(draft))}</strong>
-              </div>
               <label className="input-label">
                 <span>结算状态</span>
                 <select className="plain-select" value={draft.settlementStatus} onChange={(event) => updateDraft({
                   settlementStatus: event.target.value,
-                  settledAt: event.target.value === 'settled' ? draft.settledAt || new Date().toLocaleString('zh-CN', { hour12: false }) : ''
+                  settledAt: event.target.value === 'settled' ? draft.settledAt || new Date().toLocaleString('zh-CN', { hour12: false }) : '',
+                  settlementExchangeRate: event.target.value === 'settled' ? draft.settlementExchangeRate : null,
+                  settlementAmountCny: event.target.value === 'settled' ? draft.settlementAmountCny : null
                 })}>
                   <option value="unsettled">未结算</option>
                   <option value="settled">已结算</option>
@@ -1880,11 +1970,12 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
             <div className="purchase-editor-empty">
               <ReceiptText size={30} />
               <strong>选择一条费用编辑，或新增一笔代采购记录。</strong>
-              <span>默认使用当前 USD/CNY 汇率，保存前可以手动修改。</span>
+              <span>未结算金额按实时汇率预估，结清时锁定当时汇率。</span>
             </div>
           )}
         </Panel>
       </div>
+      {fullView && <FullValueModal label={fullView.label} value={fullView.value} onClose={() => setFullView(null)} />}
     </section>
   );
 }

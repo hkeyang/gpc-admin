@@ -334,7 +334,7 @@ export class AuthStore {
     const expense = sanitizePurchaseExpense(input, id);
     if (!expense.itemName) return { error: '请填写采购产品或事项名称' };
     if (expense.amountUsd <= 0) return { error: '支出金额 USD 必须大于 0' };
-    if (expense.exchangeRate <= 0) return { error: 'USD/CNY 汇率必须大于 0' };
+    if (expense.settlementStatus === 'settled' && expense.settlementAmountCny <= 0) return { error: '结算金额 CNY 必须大于 0' };
     await this.state.storage.put(`purchase_expense:${expense.id}`, expense);
     return { expense };
   }
@@ -704,17 +704,25 @@ function sanitizeProduct(input, id) {
 function sanitizePurchaseExpense(input, id) {
   const now = new Date();
   const amountUsd = numberOrZero(input.amountUsd);
-  const exchangeRate = positiveNumberOrNull(input.exchangeRate) || 0;
   const settlementStatus = input.settlementStatus === 'settled' ? 'settled' : 'unsettled';
-  const amountCny = Number((amountUsd * exchangeRate).toFixed(2));
+  const legacyExchangeRate = positiveNumberOrNull(input.exchangeRate);
+  const legacyAmountCny = nullableNumber(input.amountCny);
+  const settlementExchangeRate = settlementStatus === 'settled'
+    ? positiveNumberOrNull(input.settlementExchangeRate) || legacyExchangeRate
+    : null;
+  const settlementAmountCny = settlementStatus === 'settled'
+    ? nullableNumber(input.settlementAmountCny) ?? legacyAmountCny ?? (settlementExchangeRate ? Number((amountUsd * settlementExchangeRate).toFixed(2)) : null)
+    : null;
   return {
     id: normalizeProductId(id),
     purchaseDate: cleanLine(input.purchaseDate) || now.toISOString().slice(0, 10),
     itemName: cleanLine(input.itemName).slice(0, 120),
     quantityRemark: String(input.quantityRemark || '').slice(0, 200),
     amountUsd,
-    exchangeRate,
-    amountCny,
+    exchangeRate: legacyExchangeRate,
+    amountCny: legacyAmountCny,
+    settlementExchangeRate,
+    settlementAmountCny,
     settlementStatus,
     settledAt: settlementStatus === 'settled'
       ? cleanLine(input.settledAt) || now.toLocaleString('zh-CN', { hour12: false })
