@@ -58,6 +58,8 @@ import './styles.css';
 
 const defaultExchangeRate = 6.84;
 const exchangeRateSource = 'Frankfurter';
+const googleDeveloperRole = 'google_developer';
+const googleDeveloperPageId = 'google-developer';
 const businessTypes = [
   {
     id: 'googleDeveloper',
@@ -65,7 +67,7 @@ const businessTypes = [
     shortLabel: '谷歌',
     navId: 'products-google',
     costLabels: ['账号成本', 'VPS', 'ESIM', '写卡器', '其他成本'],
-    pushFields: ['account', 'password', 'phone', 'email', 'securityCode', 'vpsRemoteUrl', 'googleAuth', 'vpsUsername', 'vpsPassword', 'vpsIp', 'remark']
+    pushFields: ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'securityCode', 'vpsRemoteUrl', 'remark']
   },
   {
     id: 'appleDeveloper',
@@ -85,18 +87,16 @@ const pushTemplateStorageKey = 'gpc_push_templates';
 const pushFieldOptions = [
   { key: 'account', label: '账号', placeholder: '{account}' },
   { key: 'password', label: '密码', placeholder: '{password}' },
-  { key: 'phone', label: '绑定手机号', placeholder: '{phone}' },
-  { key: 'email', label: '绑定邮箱', placeholder: '{email}' },
+  { key: 'email', label: '恢复邮箱账号', placeholder: '{email}' },
+  { key: 'recoveryEmailPassword', label: '恢复邮箱密码', placeholder: '{recoveryEmailPassword}' },
+  { key: 'phone', label: '恢复手机号', placeholder: '{phone}' },
+  { key: 'googleAuth', label: '谷歌验证器', placeholder: '{googleAuth}' },
   { key: 'smsLink', label: '接码链接', placeholder: '{smsLink}' },
-  { key: 'securityCode', label: '设备安全码', placeholder: '{securityCode}' },
+  { key: 'securityCode', label: '备份码', placeholder: '{securityCode}' },
   { key: 'vpsRemoteUrl', label: 'VPS登录链接', placeholder: '{vpsRemoteUrl}' },
-  { key: 'googleAuth', label: 'Google 验证', placeholder: '{googleAuth}' },
-  { key: 'vpsUsername', label: 'VPS 用户名', placeholder: '{vpsUsername}' },
-  { key: 'vpsPassword', label: 'VPS 密码', placeholder: '{vpsPassword}' },
-  { key: 'vpsIp', label: 'VPS IP', placeholder: '{vpsIp}' },
   { key: 'remark', label: '备注', placeholder: '{remark}' }
 ];
-const defaultPushTemplateFields = ['account', 'password', 'phone', 'email', 'securityCode', 'vpsRemoteUrl'];
+const defaultPushTemplateFields = ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'securityCode', 'vpsRemoteUrl'];
 
 function businessTypeConfig(productType) {
   return businessTypes.find((item) => item.id === productType) || businessTypes[0];
@@ -116,7 +116,7 @@ function pushOptionsForType(productType) {
 }
 
 function defaultPushFieldsForType(productType) {
-  return pushOptionsForType(productType).slice(0, productType === 'appleDeveloper' ? 6 : 6).map((item) => item.key);
+  return pushOptionsForType(productType).slice(0, productType === 'appleDeveloper' ? 6 : 7).map((item) => item.key);
 }
 
 function createPushFormat(fields = defaultPushTemplateFields, productType = defaultBusinessType) {
@@ -211,6 +211,7 @@ function createBlankProduct(productType = defaultBusinessType) {
     createdAt: localDateInput(),
     account: '',
     email: '',
+    recoveryEmailPassword: '',
     phoneCode: '+86',
     phone: '',
     password: '',
@@ -243,8 +244,65 @@ function createBlankProduct(productType = defaultBusinessType) {
     accountCountry: '',
     accountInfoRaw: '',
     accountInfoFormatted: '',
+    googleDeveloperAccess: createBlankGoogleDeveloperAccess(),
     updatedAt: ''
   };
+}
+
+function createBlankGoogleDeveloperInfo(product = {}) {
+  return {
+    productName: product.account || product.email || '',
+    accountEmail: product.email || '',
+    phoneNumber: formatPhoneNumber(product.phoneCode, product.phone),
+    accountType: product.accountType || '',
+    creationDate: product.accountCreationDate || '',
+    country: product.accountCountry || '',
+    onlineApplications: '',
+    applicationReleaseDate: '',
+    iarcEmailDate: '',
+    appSize: '',
+    sourceCodeKeystore: '',
+    language: '',
+    paymentProfile: '',
+    violations: '',
+    notes: product.accountInfoRaw || product.accountInfoFormatted || product.remark || ''
+  };
+}
+
+function createBlankGoogleDeveloperAccess(product = {}) {
+  return {
+    enabled: false,
+    syncBasicInfo: false,
+    assignedTo: '',
+    info: createBlankGoogleDeveloperInfo(product),
+    updatedBy: '',
+    updatedAt: ''
+  };
+}
+
+function normalizeGoogleDeveloperAccess(product = {}) {
+  const access = product.googleDeveloperAccess || {};
+  return {
+    ...createBlankGoogleDeveloperAccess(product),
+    ...access,
+    enabled: Boolean(access.enabled),
+    syncBasicInfo: Boolean(access.syncBasicInfo),
+    assignedTo: String(access.assignedTo || ''),
+    info: {
+      ...createBlankGoogleDeveloperInfo(product),
+      ...(access.info || {})
+    }
+  };
+}
+
+function googleDeveloperStatus(product) {
+  const access = normalizeGoogleDeveloperAccess(product);
+  if (!access.enabled) return 'Not Shared';
+  return access.syncBasicInfo ? 'Synced' : 'Shared';
+}
+
+function canUseGoogleDeveloperPage(user) {
+  return user?.role === 'super_admin' || user?.role === googleDeveloperRole;
 }
 
 function getDeviceId() {
@@ -343,8 +401,8 @@ function settlementCnySnapshot(settlement, rate) {
     settlementProfitUsd: Number(settlement?.profit || 0),
     settlementHongKongReceivableUsd: hongKongReceivableUsd,
     settlementWuhanRetainedUsd: wuhanRetainedUsd,
-    settlementHongKongReceivableCny,
-    settlementWuhanRetainedCny
+    settlementHongKongReceivableCny: hongKongReceivableCny,
+    settlementWuhanRetainedCny: wuhanRetainedCny
   };
 }
 
@@ -505,6 +563,24 @@ function productDateValue(product) {
   return String(product.createdAt || '').slice(0, 10);
 }
 
+function compareNaturalIds(a, b) {
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right)) return left - right;
+  return String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function sortProductsByIdDesc(products) {
+  return [...products].sort((a, b) => compareNaturalIds(b.id, a.id));
+}
+
+function maxNumericProductId(products) {
+  return products.reduce((max, product) => {
+    const id = Number(product.id);
+    return Number.isFinite(id) ? Math.max(max, id) : max;
+  }, 0);
+}
+
 function compactDateLabel(value, fallback) {
   const text = String(value || '').trim();
   if (!text) return fallback;
@@ -622,14 +698,34 @@ function statusClass(status) {
 }
 
 async function apiJson(url, options = {}) {
-  const response = await fetch(url, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs || 15000;
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  const { timeoutMs: _timeoutMs, signal: _signal, ...fetchOptions } = options;
+  try {
+    const response = await fetch(url, {
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', ...(fetchOptions.headers || {}) },
+      ...fetchOptions,
+      signal: controller.signal
+    }).catch((error) => {
+      if (error.name === 'AbortError') throw new Error('请求超时，请重试。');
+      throw error;
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || '请求失败');
+    return data;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function promiseWithTimeout(promise, timeoutMs, message = '操作超时，请重试。') {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.message || '请求失败');
-  return data;
+  return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timeoutId));
 }
 
 function normalizePushTemplates(value) {
@@ -646,7 +742,7 @@ function normalizePushTemplates(value) {
       name: template.name || `${businessTypeConfig(scene).label}信息推送`,
       scene,
       fields: fields.length ? fields : fallbackFields,
-      format: template.format || createPushFormat(fields.length ? fields : fallbackFields, scene),
+      format: normalizePushFormat(template.format) || createPushFormat(fields.length ? fields : fallbackFields, scene),
       active: Boolean(template.active)
     };
   });
@@ -655,6 +751,18 @@ function normalizePushTemplates(value) {
     ...normalized,
     ...defaultPushTemplates.filter((template) => !scenes.has(template.scene))
   ];
+}
+
+function normalizePushFormat(format) {
+  return String(format || '')
+    .replace(/(Google|谷歌)\s*验证器+/g, '$1验证器')
+    .replace(/(Google|谷歌)\s*验证(?!器)/g, '$1验证器')
+    .replace(/绑定手机号/g, '恢复手机号')
+    .replace(/绑定邮箱/g, '恢复邮箱账号')
+    .replace(/设备安全码/g, '备份码')
+    .split('\n')
+    .filter((line) => !/(VPS\s*(用户名|密码|IP)|\{vpsUsername\}|\{vpsPassword\}|\{vpsIp\})/i.test(line))
+    .join('\n');
 }
 
 function readStoredPushTemplates() {
@@ -688,7 +796,7 @@ function buildProductPushMessage(product, template = defaultPushTemplates[0]) {
   const productType = productBusinessType(product);
   const options = pushOptionsForType(productType);
   const fields = Array.isArray(template.fields) && template.fields.length ? template.fields : defaultPushFieldsForType(productType);
-  const format = template.format || createPushFormat(fields, productType);
+  const format = normalizePushFormat(template.format) || createPushFormat(fields, productType);
   return pushFieldOptions.reduce((message, field) => {
     return message.replaceAll(field.placeholder, cleanMessageValue(productPushValue(product, field.key)));
   }, format || createPushFormat(options.map((item) => item.key), productType));
@@ -720,6 +828,7 @@ function App() {
     : products.find((item) => item.id === activeId) || products[0] || null;
   const currentUser = authState.user;
   const isSuperAdmin = currentUser?.role === 'super_admin';
+  const isGoogleDeveloperUser = currentUser?.role === googleDeveloperRole;
   const pendingLoginCount = adminLoginRequests.filter((item) => item.status === 'pending').length;
   const refreshAdminLoginRequests = async () => {
     if (!authState.authenticated || !isSuperAdmin) {
@@ -792,6 +901,9 @@ function App() {
   }, [pushTemplates]);
 
   const setPage = (nextPage) => {
+    if (isGoogleDeveloperUser && nextPage !== googleDeveloperPageId) {
+      nextPage = googleDeveloperPageId;
+    }
     if (nextPage === 'settings' && !isSuperAdmin) {
       nextPage = 'dashboard';
     }
@@ -800,19 +912,26 @@ function App() {
   };
 
   useEffect(() => {
+    if (authState.authenticated && isGoogleDeveloperUser && page !== googleDeveloperPageId) {
+      setPage(googleDeveloperPageId);
+      return;
+    }
     if (authState.authenticated && page === 'settings' && !isSuperAdmin) {
       setPage('dashboard');
     }
-  }, [authState.authenticated, page, isSuperAdmin]);
+    if (authState.authenticated && page === googleDeveloperPageId && !canUseGoogleDeveloperPage(currentUser)) {
+      setPage('dashboard');
+    }
+  }, [authState.authenticated, page, isSuperAdmin, isGoogleDeveloperUser, currentUser]);
 
   useEffect(() => {
     if (!authState.authenticated) return;
     let cancelled = false;
     setProductSync((current) => ({ ...current, loading: true, message: '' }));
-    apiJson('/api/products')
+    apiJson(isGoogleDeveloperUser ? '/api/google-developer-products' : '/api/products')
       .then((data) => {
         if (cancelled) return;
-        const loadedProducts = Array.isArray(data.products) ? data.products : [];
+        const loadedProducts = sortProductsByIdDesc(Array.isArray(data.products) ? data.products : []);
         setProducts(loadedProducts);
         setActiveId((currentId) => loadedProducts.some((item) => item.id === currentId) ? currentId : loadedProducts[0]?.id || currentId);
         setProductSync({ loading: false, saving: false, message: '' });
@@ -824,10 +943,13 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [authState.authenticated]);
+  }, [authState.authenticated, isGoogleDeveloperUser]);
 
   useEffect(() => {
-    if (!authState.authenticated) return;
+    if (!authState.authenticated || isGoogleDeveloperUser) {
+      setPurchaseExpenses([]);
+      return;
+    }
     let cancelled = false;
     setPurchaseExpenseSync((current) => ({ ...current, loading: true, message: '' }));
     apiJson('/api/purchase-expenses')
@@ -843,10 +965,10 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [authState.authenticated]);
+  }, [authState.authenticated, isGoogleDeveloperUser]);
 
   useEffect(() => {
-    if (!authState.authenticated) return;
+    if (!authState.authenticated || isGoogleDeveloperUser) return;
     let cancelled = false;
     apiJson('/api/exchange-rate')
       .then((data) => {
@@ -858,11 +980,11 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [authState.authenticated]);
+  }, [authState.authenticated, isGoogleDeveloperUser]);
 
   const addProduct = (productType = defaultBusinessType) => {
     const now = new Date();
-    const nextId = Math.max(...products.map((item) => item.id), 0) + 1;
+    const nextId = maxNumericProductId(products) + 1;
     const normalizedType = businessTypeConfig(productType).id;
     const nextProduct = {
       id: nextId,
@@ -870,6 +992,7 @@ function App() {
       createdAt: localDateInput(now),
       account: `new_product_${nextId}`,
       email: '',
+      recoveryEmailPassword: '',
       phoneCode: '+86',
       phone: '',
       password: '',
@@ -902,6 +1025,7 @@ function App() {
       accountCountry: '',
       accountInfoRaw: '',
       accountInfoFormatted: '',
+      googleDeveloperAccess: createBlankGoogleDeveloperAccess(),
       updatedAt: now.toLocaleTimeString('zh-CN', { hour12: false })
     };
     nextProduct.id = `draft-${Date.now()}`;
@@ -915,6 +1039,15 @@ function App() {
     try {
       const isDraft = String(product.id).startsWith('draft-');
       const payload = { ...product };
+      const access = normalizeGoogleDeveloperAccess(payload);
+      if (access.enabled && access.syncBasicInfo) {
+        payload.googleDeveloperAccess = {
+          ...access,
+          info: createBlankGoogleDeveloperInfo(payload),
+          updatedBy: currentUser?.username || access.updatedBy,
+          updatedAt: new Date().toLocaleString('zh-CN', { hour12: false })
+        };
+      }
       if (isDraft) delete payload.id;
       const data = await apiJson(isDraft ? '/api/products' : `/api/products/${encodeURIComponent(product.id)}`, {
         method: isDraft ? 'POST' : 'PUT',
@@ -924,9 +1057,10 @@ function App() {
       setProducts((current) => {
         const withoutDraft = current.filter((item) => item.id !== product.id);
         const exists = withoutDraft.some((item) => item.id === savedProduct.id);
-        return exists
+        const nextProducts = exists
           ? withoutDraft.map((item) => item.id === savedProduct.id ? savedProduct : item)
           : [savedProduct, ...withoutDraft];
+        return sortProductsByIdDesc(nextProducts);
       });
       setDraftProduct(null);
       setActiveId(savedProduct.id);
@@ -934,6 +1068,45 @@ function App() {
       return { ok: true, product: savedProduct };
     } catch (error) {
       const message = error.message || '保存失败，请稍后重试。';
+      setProductSync({ loading: false, saving: false, message });
+      return { ok: false, message };
+    }
+  };
+
+  const saveGoogleDeveloperProduct = async (product) => {
+    setProductSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const data = await apiJson(`/api/google-developer-products/${encodeURIComponent(product.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ product })
+      });
+      const savedProduct = data.product;
+      setProducts((current) => sortProductsByIdDesc(current.map((item) => item.id === savedProduct.id ? { ...item, ...savedProduct } : item)));
+      setProductSync({ loading: false, saving: false, message: 'Basic information saved.' });
+      return { ok: true, product: savedProduct };
+    } catch (error) {
+      const message = error.message || 'Save failed. Please try again.';
+      setProductSync({ loading: false, saving: false, message });
+      return { ok: false, message };
+    }
+  };
+
+  const settleProductStatus = async (product, settlementPatch) => {
+    setProductSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const data = await apiJson(`/api/products/${encodeURIComponent(product.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify(settlementPatch),
+        timeoutMs: 10000
+      });
+      const savedProduct = data.product;
+      setProducts((current) => sortProductsByIdDesc(current.map((item) => item.id === savedProduct.id ? savedProduct : item)));
+      setDraftProduct(null);
+      setActiveId(savedProduct.id);
+      setProductSync({ loading: false, saving: false, message: '结算状态已保存。' });
+      return { ok: true, product: savedProduct };
+    } catch (error) {
+      const message = error.message || '结算保存失败，请稍后重试。';
       setProductSync({ loading: false, saving: false, message });
       return { ok: false, message };
     }
@@ -1055,7 +1228,18 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar current={page} onChange={setPage} user={currentUser} pendingLoginCount={pendingLoginCount} />
+      <Sidebar
+        current={page}
+        onChange={setPage}
+        user={currentUser}
+        pendingLoginCount={pendingLoginCount}
+        products={products}
+        activeGoogleDeveloperId={activeId}
+        onOpenGoogleDeveloperProduct={(id) => {
+          setActiveId(id);
+          setPage(googleDeveloperPageId);
+        }}
+      />
       <main className="main">
         <Topbar
           user={currentUser}
@@ -1070,8 +1254,18 @@ function App() {
             <button className="link-button" type="button" onClick={() => setPage('settings')}>去系统设置</button>
           </div>
         )}
-        {page === 'dashboard' && <Dashboard products={products} exchangeRate={exchangeRate} onOpenProducts={() => setPage(businessTypes[0].navId)} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
-        {businessTypes.some((item) => item.navId === page) && (() => {
+        {page === googleDeveloperPageId && canUseGoogleDeveloperPage(currentUser) && (
+          <GoogleDeveloperPage
+            products={products}
+            user={currentUser}
+            saving={productSync.saving}
+            activeId={activeId}
+            onActiveChange={setActiveId}
+            onSave={saveGoogleDeveloperProduct}
+          />
+        )}
+        {!isGoogleDeveloperUser && page === 'dashboard' && <Dashboard products={products} exchangeRate={exchangeRate} onOpenProducts={() => setPage(businessTypes[0].navId)} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
+        {!isGoogleDeveloperUser && businessTypes.some((item) => item.navId === page) && (() => {
           const productType = businessTypeFromPage(page);
           const visibleProducts = products.filter((item) => productBusinessType(item) === productType);
           return (
@@ -1089,9 +1283,9 @@ function App() {
             />
           );
         })()}
-        {page === 'account-details' && <AccountDetailsPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
+        {!isGoogleDeveloperUser && page === 'account-details' && <AccountDetailsPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
         {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
-        {page === 'purchase-expenses' && (
+        {!isGoogleDeveloperUser && page === 'purchase-expenses' && (
           <PurchaseExpensesPage
             expenses={purchaseExpenses}
             exchangeRate={exchangeRate}
@@ -1102,10 +1296,10 @@ function App() {
           />
         )}
         {purchaseExpenseSync.message && <div className="global-notice"><Info size={15} />{purchaseExpenseSync.message}</div>}
-        {page === 'workbench' && activeProduct && (
-          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} saving={productSync.saving} />
+        {!isGoogleDeveloperUser && page === 'workbench' && activeProduct && (
+          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} saving={productSync.saving} />
         )}
-        {page === 'push-settings' && (
+        {!isGoogleDeveloperUser && page === 'push-settings' && (
           <PushSettingsPage
             products={products}
             templates={pushTemplates}
@@ -1121,7 +1315,7 @@ function App() {
 }
 
 function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState('xyzunknown');
   const [password, setPassword] = useState('');
   const [message, setMessage] = useState('');
   const [localRequestId, setLocalRequestId] = useState(pendingRequestId);
@@ -1183,7 +1377,7 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
         </div>
         <div className="login-copy">
           <h1>后台登录</h1>
-          <p>账号密码验证后，仅授权设备可进入管理后台。</p>
+          <p>账号密码验证后，仅授权设备可进入管理后台；同一账号可在多台设备同时在线。</p>
         </div>
         {!activeRequestId ? (
           <form className="login-form" onSubmit={submit}>
@@ -1215,7 +1409,7 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
             {message && <div className="login-error">{message}</div>}
             <button className="primary-button login-submit" onClick={checkApproval}>我已获得批准，进入后台</button>
             <button className="secondary-button login-submit" onClick={() => { setLocalRequestId(''); setMessage(''); }}>返回登录</button>
-            <span>超级管理员在“系统设置”里点击同意后，你才能进入后台。</span>
+            <span>在已登录的管理员后台“系统设置”里点击同意后，这台设备会自动进入后台。</span>
           </div>
         )}
       </section>
@@ -1223,9 +1417,11 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
   );
 }
 
-function Sidebar({ current, onChange, user, pendingLoginCount }) {
+function Sidebar({ current, onChange, user, pendingLoginCount, products = [], activeGoogleDeveloperId, onOpenGoogleDeveloperProduct }) {
   const isSuperAdmin = user?.role === 'super_admin';
-  const nav = [
+  const isGoogleDeveloperUser = user?.role === googleDeveloperRole;
+  const googleDeveloperProducts = products.filter((product) => normalizeGoogleDeveloperAccess(product).enabled);
+  const internalNav = [
     { id: 'dashboard', label: '首页', icon: Home },
     ...businessTypes.map((item) => ({ id: item.navId, label: item.label, icon: ClipboardList })),
     { id: 'account-details', label: '账号详情', icon: UserRound },
@@ -1233,6 +1429,10 @@ function Sidebar({ current, onChange, user, pendingLoginCount }) {
     { id: 'push-settings', label: '推送设置', icon: Send },
     { id: 'settings', label: '系统设置', icon: Settings }
   ].filter((item) => item.id !== 'settings' || isSuperAdmin);
+  const nav = [
+    ...(!isGoogleDeveloperUser ? internalNav : []),
+    ...(canUseGoogleDeveloperPage(user) ? [{ id: googleDeveloperPageId, label: 'Google Developer', icon: FileText }] : [])
+  ];
 
   return (
     <aside className="sidebar">
@@ -1247,12 +1447,12 @@ function Sidebar({ current, onChange, user, pendingLoginCount }) {
         {nav.map((item) => {
           const Icon = item.icon;
           return (
+            <React.Fragment key={item.id}>
             <button
-              key={item.id}
-            className={`nav-item ${current === item.id ? 'active' : ''}`}
-            onClick={() => !item.disabled && onChange(item.id)}
-            disabled={item.disabled}
-          >
+              className={`nav-item ${current === item.id ? 'active' : ''}`}
+              onClick={() => !item.disabled && onChange(item.id)}
+              disabled={item.disabled}
+            >
               <span className="nav-item-main">
                 <Icon size={17} />
                 <span>{item.label}</span>
@@ -1261,6 +1461,22 @@ function Sidebar({ current, onChange, user, pendingLoginCount }) {
                 <span className="nav-count">{pendingLoginCount}</span>
               )}
             </button>
+            {item.id === googleDeveloperPageId && googleDeveloperProducts.length > 0 && (
+              <div className="nav-sublist">
+                {googleDeveloperProducts.map((product) => (
+                  <button
+                    key={product.id}
+                    type="button"
+                    className={`nav-subitem ${activeGoogleDeveloperId === product.id ? 'active' : ''}`}
+                    onClick={() => onOpenGoogleDeveloperProduct?.(product.id)}
+                    title={product.account || product.email || `#${product.id}`}
+                  >
+                    {product.account || product.email || `#${product.id}`}
+                  </button>
+                ))}
+              </div>
+            )}
+            </React.Fragment>
           );
         })}
       </nav>
@@ -1269,7 +1485,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount }) {
 }
 
 function Topbar({ user, onLogout, onOpenSettings, pendingLoginCount }) {
-  const roleLabel = user?.role === 'super_admin' ? '超级管理员' : '伙伴管理员';
+  const roleLabel = user?.role === 'super_admin' ? '超级管理员' : user?.role === googleDeveloperRole ? 'Google Developer' : '伙伴管理员';
   return (
     <header className="topbar">
       <div className="topbar-spacer" />
@@ -1289,6 +1505,7 @@ function Topbar({ user, onLogout, onOpenSettings, pendingLoginCount }) {
 function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) {
   const [trendRange, setTrendRange] = useState('7d');
   const [customTrendRange, setCustomTrendRange] = useState({ from: '', to: '' });
+  const [settlementInfoOpen, setSettlementInfoOpen] = useState(false);
   const total = products.length;
   const sold = products.filter((item) => item.isSold).length;
   const paid = products.filter((item) => item.isPaid).length;
@@ -1327,7 +1544,24 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
 
   return (
     <section className="page">
-      <div className="page-title"><h1>首页</h1><span>业务驾驶舱</span></div>
+      <div className="page-title dashboard-title">
+        <h1>首页</h1>
+        <button
+          className={`title-toggle ${settlementInfoOpen ? 'open' : ''}`}
+          type="button"
+          onClick={() => setSettlementInfoOpen((open) => !open)}
+          aria-expanded={settlementInfoOpen}
+        >
+          结算信息 <ChevronDown size={14} />
+        </button>
+        {settlementInfoOpen && (
+          <div className="settlement-info-card" aria-label="结算信息">
+            <strong>6227002722020149126</strong>
+            <span>中国建设银行</span>
+            <span>徐勇</span>
+          </div>
+        )}
+      </div>
       <div className="kpi-grid six">
         <Kpi icon={WalletCards} label="累计产品" value={`${total} 件`} sub="实时产品库" tone="purple" />
         <Kpi icon={ShoppingCart} label="累计售出" value={`${sold} 件`} sub={`回款 ${paid} 件`} tone="blue" />
@@ -1411,7 +1645,7 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
             <tbody>
               {products.slice(0, 5).map((item) => (
                 <tr key={item.id} onClick={() => onOpenWorkbench(item.id)}>
-                  <td>#{`20240427${String(item.id).padStart(2, '0')}`}</td>
+                  <td>{item.id}</td>
                   <td>{businessTypeConfig(productBusinessType(item)).shortLabel}</td>
                   <td>{item.account}</td>
                   <td><StatusBadge label={productStatus(item)} /></td>
@@ -2148,24 +2382,28 @@ function EmptyState({ icon: Icon, title, text }) {
   );
 }
 
-function Workbench({ product, user, onSave, saving }) {
+function Workbench({ product, user, onSave, onSettle, saving }) {
   const [draft, setDraft] = useState(product);
   const [dirty, setDirty] = useState(false);
   const [visible, setVisible] = useState({});
   const [costDraft, setCostDraft] = useState({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
   const [showCostForm, setShowCostForm] = useState(false);
   const [notice, setNotice] = useState('');
+  const [settlementNotice, setSettlementNotice] = useState('');
+  const [settling, setSettling] = useState(false);
   const [fullView, setFullView] = useState(null);
   const settlement = settlementAmounts(draft);
   const canEditCredentials = user?.role === 'super_admin';
   const isNewProduct = String(draft.id).startsWith('draft-');
   const business = businessTypeConfig(productBusinessType(draft));
   const isAppleDeveloper = business.id === 'appleDeveloper';
+  const googleDeveloperAccess = normalizeGoogleDeveloperAccess(draft);
 
   useEffect(() => {
     setDraft(product);
     setDirty(false);
     setNotice('');
+    setSettlementNotice('');
     setCostDraft({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
     setShowCostForm(false);
   }, [product?.id]);
@@ -2186,13 +2424,16 @@ function Workbench({ product, user, onSave, saving }) {
   };
   const updateField = (field, value) => {
     setNotice('');
+    setSettlementNotice('');
     commitChange({ [field]: value });
   };
   const updateSaleStatus = (checked) => {
     if (checked && settlement.totalCost <= 0) {
       setNotice('请先填写成本后再标记售出，避免利润和分成被误算。');
+      setSettlementNotice('请先填写成本后再进入结算。');
       return;
     }
+    setSettlementNotice('');
     commitChange({
       isSold: checked,
       saleTime: checked && !draft.saleTime ? fromDateTimeInputValue(localDateTimeInput()) : draft.saleTime
@@ -2201,17 +2442,51 @@ function Workbench({ product, user, onSave, saving }) {
   const updatePaidStatus = (checked) => {
     if (checked && !draft.isSold) {
       setNotice('请先标记售出，再登记回款。');
+      setSettlementNotice('请先标记售出，再登记回款。');
       return;
     }
     updateField('isPaid', checked);
   };
   const updateCost = (id, amount) => {
     setNotice('');
+    setSettlementNotice('');
     commitChange({ costs: draft.costs.map((item) => item.id === id ? { ...item, amount: amount === '' ? '' : Number(amount) } : item) });
   };
   const updateCostOwner = (id, owner) => {
     setNotice('');
+    setSettlementNotice('');
     commitChange({ costs: draft.costs.map((item) => item.id === id ? { ...item, owner: normalizeCostOwner(owner) } : item) });
+  };
+  const updateGoogleDeveloperAccess = (patch) => {
+    setNotice('');
+    setSettlementNotice('');
+    const currentAccess = normalizeGoogleDeveloperAccess(draft);
+    const nextAccess = {
+      ...currentAccess,
+      ...patch,
+      updatedAt: new Date().toLocaleString('zh-CN', { hour12: false })
+    };
+    commitChange({ googleDeveloperAccess: nextAccess });
+  };
+  const syncGoogleDeveloperInfo = () => {
+    updateGoogleDeveloperAccess({
+      enabled: true,
+      syncBasicInfo: true,
+      info: createBlankGoogleDeveloperInfo(draft),
+      updatedBy: user?.username || ''
+    });
+    setNotice('已同步基础信息到 Google Developer 英文页面。保存产品后对方即可看到。');
+  };
+  const removeGoogleDeveloperAccess = () => {
+    const confirmed = window.confirm('确定删除该产品的 Google Developer 权限吗？删除后对方后台将看不到这条商品信息。');
+    if (!confirmed) return;
+    updateGoogleDeveloperAccess({
+      enabled: false,
+      syncBasicInfo: false,
+      assignedTo: '',
+      updatedBy: user?.username || ''
+    });
+    setNotice('已删除该产品的 Google Developer 权限。保存产品后对方后台将不再显示这条商品。');
   };
   const addCost = () => {
     if (!costDraft.label || !costDraft.amount) return;
@@ -2228,12 +2503,16 @@ function Workbench({ product, user, onSave, saving }) {
   const settleProduct = async (rateSnapshot = {}) => {
     if (settlement.totalCost <= 0) {
       setNotice('请先填写成本后再结算。');
+      setSettlementNotice('请先填写成本后再结算。');
       return;
     }
     if (!draft.isPaid) {
       setNotice('未回款产品暂不允许结算，请先确认回款状态。');
+      setSettlementNotice('未回款产品暂不允许结算，请先确认回款状态。');
       return;
     }
+    setSettling(true);
+    setSettlementNotice('正在保存结算状态...');
     const nextDraft = {
       ...draft,
       settlementStatus: 'settled',
@@ -2241,13 +2520,43 @@ function Workbench({ product, user, onSave, saving }) {
       settledAt: new Date().toLocaleString('zh-CN', { hour12: false }),
       updatedAt: new Date().toLocaleTimeString('zh-CN', { hour12: false })
     };
-    const result = await onSave(nextDraft);
-    if (result.ok) {
-      setDraft(result.product);
-      setDirty(false);
-      setNotice('已保存结算状态，应结算香港与武汉留存金额已按本次汇率锁定。');
-    } else {
-      setNotice(result.message || '结算状态保存失败，请稍后重试。');
+    try {
+      const settlementPatch = {
+        settlementStatus: nextDraft.settlementStatus,
+        settlementExchangeRate: nextDraft.settlementExchangeRate,
+        settlementShareCnyHongKong: nextDraft.settlementShareCnyHongKong,
+        settlementShareCnyWuhan: nextDraft.settlementShareCnyWuhan,
+        settlementHongKongCostUsd: nextDraft.settlementHongKongCostUsd,
+        settlementWuhanCostUsd: nextDraft.settlementWuhanCostUsd,
+        settlementProfitUsd: nextDraft.settlementProfitUsd,
+        settlementHongKongReceivableUsd: nextDraft.settlementHongKongReceivableUsd,
+        settlementWuhanRetainedUsd: nextDraft.settlementWuhanRetainedUsd,
+        settlementHongKongReceivableCny: nextDraft.settlementHongKongReceivableCny,
+        settlementWuhanRetainedCny: nextDraft.settlementWuhanRetainedCny,
+        settledAt: nextDraft.settledAt,
+        updatedAt: nextDraft.updatedAt
+      };
+      const result = await promiseWithTimeout(
+        onSettle(draft, settlementPatch),
+        15000,
+        '结算保存超时，请刷新后确认状态，或稍后重试。'
+      );
+      if (result.ok) {
+        setDraft(result.product);
+        setDirty(false);
+        setNotice('已保存结算状态，应结算香港与武汉留存金额已按本次汇率锁定。');
+        setSettlementNotice('已保存结算状态。');
+      } else {
+        const message = result.message || '结算状态保存失败，请稍后重试。';
+        setNotice(message);
+        setSettlementNotice(message);
+      }
+    } catch (error) {
+      const message = error.message || '结算状态保存失败，请稍后重试。';
+      setNotice(message);
+      setSettlementNotice(message);
+    } finally {
+      setSettling(false);
     }
   };
   const openFullValue = (label, value) => {
@@ -2284,19 +2593,17 @@ function Workbench({ product, user, onSave, saving }) {
             icon={FileText}
             subtitle="填写产品基础信息，为后续流程提供准备"
           >
-            {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、Google 验证、设备安全码、VPS 密码等敏感凭据仅超级管理员可修改。</div>}
+            {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、恢复邮箱密码、谷歌验证器、备份码等敏感凭据仅超级管理员可修改。</div>}
             <div className="form-grid">
               <Input label="上架时间" type="date" value={productDateValue(draft) || localDateInput()} icon={Calendar} onChange={(value) => updateField('createdAt', value)} />
-              <Input label="账号" value={draft.account} onChange={(value) => updateField('account', value)} />
+              <Input label="账号" value={draft.account} copyable onOpenFull={openFullValue} onChange={(value) => updateField('account', value)} />
               <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
-              <Input label="绑定邮箱" value={draft.email} onChange={(value) => updateField('email', value)} />
-              <PhoneInput product={draft} onChange={(patch) => commitChange(patch)} />
+              <Input label="恢复邮箱账号" value={draft.email} copyable onOpenFull={openFullValue} onChange={(value) => updateField('email', value)} />
+              <SecretInput readOnly={!canEditCredentials} label="恢复邮箱密码" value={draft.recoveryEmailPassword} visible={visible.recoveryEmailPassword} onToggle={() => setVisible({ ...visible, recoveryEmailPassword: !visible.recoveryEmailPassword })} onChange={(value) => updateField('recoveryEmailPassword', value)} onOpenFull={openFullValue} />
+              <PhoneInput product={draft} copyable onChange={(patch) => commitChange(patch)} />
               {isAppleDeveloper && <Input label="接码链接" value={draft.smsLink} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('smsLink', value)} />}
-              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="Google 验证" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />}
-              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="设备安全码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />}
-              {!isAppleDeveloper && <Input label="VPS 用户名" value={draft.vpsUsername} onChange={(value) => updateField('vpsUsername', value)} />}
-              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="VPS 密码" value={draft.vpsPassword} visible={visible.vpsPassword} onToggle={() => setVisible({ ...visible, vpsPassword: !visible.vpsPassword })} onChange={(value) => updateField('vpsPassword', value)} onOpenFull={openFullValue} />}
-              {!isAppleDeveloper && <Input label="VPS IP" value={draft.vpsIp} copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsIp', value)} />}
+              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="谷歌验证器" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />}
+              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="备份码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />}
               {!isAppleDeveloper && <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />}
               <label className="input-label">
                 <span>账号类型</span>
@@ -2312,6 +2619,46 @@ function Workbench({ product, user, onSave, saving }) {
               <Textarea label="备注" value={draft.remark} copyable onOpenFull={openFullValue} onChange={(value) => updateField('remark', value)} />
             </div>
           </Section>
+
+          {canEditCredentials && !isAppleDeveloper && (
+            <Section title="Google Developer Access" icon={ShieldCheck} subtitle="Control the English basic information page for the overseas buyer">
+              <div className="google-access-box">
+                <label className="checkbox-chip">
+                  <input
+                    type="checkbox"
+                    checked={googleDeveloperAccess.enabled}
+                    onChange={(event) => updateGoogleDeveloperAccess({ enabled: event.target.checked })}
+                  />
+                  <span>Allow Google Developer to view this product</span>
+                </label>
+                <label className="checkbox-chip">
+                  <input
+                    type="checkbox"
+                    checked={googleDeveloperAccess.syncBasicInfo}
+                    onChange={(event) => updateGoogleDeveloperAccess({ syncBasicInfo: event.target.checked })}
+                  />
+                  <span>Sync Basic Information</span>
+                </label>
+                <Input
+                  label="Assign To"
+                  value={googleDeveloperAccess.assignedTo}
+                  onChange={(value) => updateGoogleDeveloperAccess({ assignedTo: value })}
+                />
+                <button className="secondary-button" type="button" onClick={syncGoogleDeveloperInfo}>
+                  <RefreshCw size={15} /> Sync current basic info
+                </button>
+                <button
+                  className="danger-button google-access-remove"
+                  type="button"
+                  disabled={!googleDeveloperAccess.enabled}
+                  onClick={removeGoogleDeveloperAccess}
+                >
+                  <Trash2 size={14} /> Remove access
+                </button>
+              </div>
+              <div className="support-note"><Info size={15} /> This only exposes the English Basic Information area. Costs, sales, settlement, passwords and internal Chinese data stay hidden.</div>
+            </Section>
+          )}
 
           <Section title="成本录入" icon={Coins} subtitle="录入各项成本，系统将自动计算总成本（USD）">
             <div className="cost-row">
@@ -2370,14 +2717,14 @@ function Workbench({ product, user, onSave, saving }) {
             </div>
           </Section>
         </div>
-        <ProfitPreview product={draft} settlement={settlement} onSettle={settleProduct} />
+        <ProfitPreview product={draft} settlement={settlement} onSettle={settleProduct} settling={settling} settlementNotice={settlementNotice} />
       </div>
       {fullView && <FullValueModal label={fullView.label} value={fullView.value} onClose={() => setFullView(null)} />}
     </section>
   );
 }
 
-function ProfitPreview({ product, settlement, onSettle }) {
+function ProfitPreview({ product, settlement, onSettle, settling, settlementNotice }) {
   const [exchangeRate, setExchangeRate] = useState(defaultExchangeRate);
   const [rateMeta, setRateMeta] = useState({ date: '', source: exchangeRateSource });
   const [rateLoading, setRateLoading] = useState(false);
@@ -2486,7 +2833,17 @@ function ProfitPreview({ product, settlement, onSettle }) {
         <div className="check-list"><span className={product.isSold ? 'ok' : 'bad'}></span>{product.isSold ? '已确认：产品已售' : '待处理：售出后进入结算流程'}</div>
         <div className="check-list"><span className={product.isPaid ? 'ok' : 'bad'}></span>{product.isPaid ? '已确认：回款完成' : '待处理：未回款不允许结算'}</div>
         <div className="check-list"><span className={product.isSold && product.settlementStatus === 'settled' ? 'ok' : 'bad'}></span>{product.isSold ? (product.settlementStatus === 'settled' ? `已结算：${product.settledAt} Admin` : '未结算：尚未完成结算') : '待售：售出后才会进入待结算'}</div>
-        {product.isSold && product.settlementStatus !== 'settled' && <button className="primary-button full" onClick={() => onSettle({ rate: exchangeRate })}>标记为已结算</button>}
+        {settlementNotice && <div className="settlement-notice"><Info size={14} />{settlementNotice}</div>}
+        {product.isSold && product.settlementStatus !== 'settled' && (
+          <button
+            className="primary-button full"
+            type="button"
+            disabled={settling}
+            onClick={() => onSettle({ rate: exchangeRate })}
+          >
+            {settling ? '结算中...' : '标记为已结算'}
+          </button>
+        )}
       </Panel>
       <div className="calc-note">{isSettled ? '已结算 CNY 金额保持不变' : (product.isSold ? '实时计算，自动更新' : '待售时仅作预览，不参与结算')}</div>
     </aside>
@@ -2542,28 +2899,30 @@ function SecretInput({ label, value, visible, onToggle, onChange, disabled = fal
   );
 }
 
-function PhoneInput({ product, onChange, disabled = false }) {
+function PhoneInput({ product, onChange, disabled = false, copyable = false }) {
+  const text = formatPhoneNumber(product.phoneCode, product.phone);
   return (
     <label className="input-label">
-      <span>绑定手机号</span>
+      <span>恢复手机号</span>
       <div className="phone-shell">
         <select disabled={disabled} value={product.phoneCode} onChange={(event) => onChange({ phoneCode: event.target.value })}>
-          <option>+86</option><option>+852</option><option>+1</option>
+          <option>+86</option><option>+852</option><option>+1</option><option>+44</option>
         </select>
         <input disabled={disabled} value={product.phone} onChange={(event) => onChange({ phone: event.target.value })} />
+        {copyable && <CopyFieldButton value={text} disabled={disabled} />}
       </div>
     </label>
   );
 }
 
-function Textarea({ label, value, onChange, disabled = false, copyable = false, onOpenFull }) {
+function Textarea({ label, value, onChange, disabled = false, copyable = false, onOpenFull, placeholder = '请输入备注信息（可选）' }) {
   const text = String(value || '');
   return (
     <label className="input-label wide">
       <span>{label}</span>
       <div className="textarea-shell" onDoubleClick={() => onOpenFull?.(label, text)} title="双击查看完整内容">
-        <textarea disabled={disabled} value={value || ''} maxLength={200} placeholder="请输入备注信息（可选）" onChange={(event) => onChange(event.target.value)} />
-        <em>{(value || '').length} / 200</em>
+        <textarea disabled={disabled} value={value || ''} maxLength={500} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+        <em>{(value || '').length} / 500</em>
         {copyable && <CopyFieldButton value={text} disabled={disabled} />}
       </div>
     </label>
@@ -2772,11 +3131,119 @@ function PushSettingsPage({ products, templates, onChange }) {
   );
 }
 
+function GoogleDeveloperPage({ products, user, saving, activeId, onActiveChange, onSave }) {
+  const visibleProducts = products.filter((product) => normalizeGoogleDeveloperAccess(product).enabled);
+  const activeProduct = visibleProducts.find((item) => item.id === activeId) || visibleProducts[0] || null;
+  const [draft, setDraft] = useState(activeProduct || createBlankProduct());
+  const [visible, setVisible] = useState({});
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => {
+    if (!visibleProducts.length) return;
+    onActiveChange?.(visibleProducts.some((item) => item.id === activeId) ? activeId : visibleProducts[0].id);
+  }, [products]);
+
+  useEffect(() => {
+    setDraft(activeProduct || createBlankProduct());
+    setVisible({});
+    setNotice('');
+  }, [activeProduct?.id]);
+
+  const updateField = (field, value) => {
+    setDraft((current) => ({ ...current, [field]: value }));
+    setNotice('');
+  };
+  const updatePhone = (patch) => {
+    setDraft((current) => ({ ...current, ...patch }));
+    setNotice('');
+  };
+
+  const saveInfo = async () => {
+    if (!activeProduct) return;
+    const result = await onSave(draft);
+    setNotice(result.ok ? 'Basic information saved.' : result.message || 'Save failed. Please try again.');
+  };
+
+  return (
+    <section className="page google-developer-page">
+      <div className="page-title"><h1>Google Developer</h1><span>Basic Information</span></div>
+      <div className="google-developer-layout single">
+        <section className="form-section google-basic-panel">
+          <div className="section-title">
+            <FileText size={18} />
+            <strong>Basic Information</strong>
+            <span>Fill in product basic information for follow-up workflow</span>
+            {activeProduct && (
+              <div className="section-action">
+                <button className="primary-button" type="button" disabled={saving} onClick={saveInfo}>
+                  <Save size={16} />{saving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            )}
+          </div>
+          {!visibleProducts.length ? (
+            <EmptyState icon={FileText} title="No shared accounts" text={user?.role === 'super_admin' ? 'Enable Google Developer Access on a product first.' : 'No account has been shared with this user yet.'} />
+          ) : activeProduct ? (
+            <>
+              {notice && <div className="inline-notice google-notice"><Info size={15} />{notice}</div>}
+              <div className="form-grid">
+                <Input label="Listed Date" type="date" value={productDateValue(draft) || localDateInput()} icon={Calendar} onChange={(value) => updateField('createdAt', value)} />
+                <Input label="Account" value={draft.account} copyable onChange={(value) => updateField('account', value)} />
+                <SecretInput label="Password" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} />
+                <Input label="Recovery Email Account" value={draft.email} copyable onChange={(value) => updateField('email', value)} />
+                <SecretInput label="Recovery Email Password" value={draft.recoveryEmailPassword} visible={visible.recoveryEmailPassword} onToggle={() => setVisible({ ...visible, recoveryEmailPassword: !visible.recoveryEmailPassword })} onChange={(value) => updateField('recoveryEmailPassword', value)} />
+                <GoogleDeveloperPhoneInput product={draft} copyable onChange={updatePhone} />
+                <SecretInput label="Google Authenticator" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
+                <SecretInput label="Backup Codes" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
+                <Input label="VPS Remote Link" value={draft.vpsRemoteUrl} wide copyable onChange={(value) => updateField('vpsRemoteUrl', value)} />
+                <label className="input-label">
+                  <span>Account Type</span>
+                  <div className="input-shell">
+                    <select value={draft.accountType || ''} onChange={(event) => updateField('accountType', event.target.value)}>
+                      <option value="">Not Selected</option>
+                      <option value="enterprise">Enterprise</option>
+                      <option value="personal">Personal</option>
+                    </select>
+                  </div>
+                </label>
+                <Input label="Country" value={draft.accountCountry} onChange={(value) => updateField('accountCountry', value)} />
+                <Textarea label="Notes" value={draft.remark} placeholder="Enter notes (optional)" copyable onChange={(value) => updateField('remark', value)} />
+              </div>
+            </>
+          ) : (
+            <div className="purchase-editor-empty">
+              <FileText size={30} />
+              <strong>No account selected.</strong>
+              <span>Shared accounts will appear under Google Developer in the sidebar.</span>
+            </div>
+          )}
+        </section>
+      </div>
+    </section>
+  );
+}
+
+function GoogleDeveloperPhoneInput({ product, onChange, copyable = false }) {
+  const text = formatPhoneNumber(product.phoneCode, product.phone);
+  return (
+    <label className="input-label">
+      <span>Recovery Phone Number</span>
+      <div className="phone-shell">
+        <select value={product.phoneCode} onChange={(event) => onChange({ phoneCode: event.target.value })}>
+          <option>+86</option><option>+852</option><option>+1</option><option>+44</option>
+        </select>
+        <input value={product.phone} onChange={(event) => onChange({ phone: event.target.value })} />
+        {copyable && <CopyFieldButton value={text} />}
+      </div>
+    </label>
+  );
+}
+
 function SettingsPage({ user, onRequestsChanged }) {
   const isSuperAdmin = user?.role === 'super_admin';
   const [users, setUsers] = useState([]);
   const [requests, setRequests] = useState([]);
-  const [accountDraft, setAccountDraft] = useState({ username: '', password: '' });
+  const [accountDraft, setAccountDraft] = useState({ username: '', password: '', role: 'partner_admin' });
   const [settingsMessage, setSettingsMessage] = useState('');
   const pendingRequests = requests.filter((item) => item.status === 'pending');
 
@@ -2800,15 +3267,15 @@ function SettingsPage({ user, onRequestsChanged }) {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: accountDraft.username, password: accountDraft.password, role: 'partner_admin' })
+      body: JSON.stringify({ username: accountDraft.username, password: accountDraft.password, role: accountDraft.role })
     });
     const data = await response.json();
     if (!response.ok) {
       setSettingsMessage(data.message || '创建账号失败');
       return;
     }
-    setSettingsMessage(`已创建伙伴管理员：${data.user.username}`);
-    setAccountDraft({ username: '', password: '' });
+    setSettingsMessage(`已创建账号：${data.user.username}`);
+    setAccountDraft({ username: '', password: '', role: 'partner_admin' });
     loadAdminData();
   };
 
@@ -2822,7 +3289,7 @@ function SettingsPage({ user, onRequestsChanged }) {
       setSettingsMessage(data.message || '审批失败');
       return;
     }
-    setSettingsMessage('已同意该伙伴管理员登录');
+    setSettingsMessage('已同意该设备登录');
     loadAdminData();
     onRequestsChanged?.();
   };
@@ -2840,13 +3307,13 @@ function SettingsPage({ user, onRequestsChanged }) {
       setSettingsMessage(data.message || '账号状态更新失败');
       return;
     }
-    setSettingsMessage(`${status === 'active' ? '已启用' : '已禁用'}伙伴管理员：${targetUser.username}`);
+    setSettingsMessage(`${status === 'active' ? '已启用' : '已禁用'}账号：${targetUser.username}`);
     loadAdminData();
   };
 
   const deleteUser = async (targetUser) => {
     setSettingsMessage('');
-    const confirmed = window.confirm(`确定删除伙伴管理员账号「${targetUser.username}」吗？删除后将无法登录。`);
+    const confirmed = window.confirm(`确定删除账号「${targetUser.username}」吗？删除后将无法登录。`);
     if (!confirmed) return;
     const response = await fetch(`/api/admin/users/${encodeURIComponent(targetUser.username)}`, {
       method: 'DELETE',
@@ -2857,7 +3324,7 @@ function SettingsPage({ user, onRequestsChanged }) {
       setSettingsMessage(data.message || '删除账号失败');
       return;
     }
-    setSettingsMessage(`已删除伙伴管理员：${targetUser.username}`);
+    setSettingsMessage(`已删除账号：${targetUser.username}`);
     loadAdminData();
   };
 
@@ -2873,12 +3340,21 @@ function SettingsPage({ user, onRequestsChanged }) {
         ) : (
           <div className="settings-admin-grid">
             <section className="settings-block">
-              <h3>生成伙伴管理员账号</h3>
-              <p>伙伴管理员登录后需要你在这里同意；进入后可查看全部产品资料并维护业务数据，但不能管理后台账号或修改敏感凭据。</p>
+              <h3>生成后台账号</h3>
+              <p>伙伴管理员、Google Developer 和超级管理员的新设备登录都需要你在这里同意；已授权设备可同时在线。</p>
               <div className="settings-form">
                 <Input label="账号" value={accountDraft.username} onChange={(value) => setAccountDraft({ ...accountDraft, username: value })} />
                 <Input label="初始密码" type="password" value={accountDraft.password} onChange={(value) => setAccountDraft({ ...accountDraft, password: value })} />
-                <button className="primary-button" onClick={createPartner}>创建伙伴账号</button>
+                <label className="input-label">
+                  <span>账号角色</span>
+                  <div className="input-shell">
+                    <select value={accountDraft.role} onChange={(event) => setAccountDraft({ ...accountDraft, role: event.target.value })}>
+                      <option value="partner_admin">伙伴管理员</option>
+                      <option value={googleDeveloperRole}>Google Developer</option>
+                    </select>
+                  </div>
+                </label>
+                <button className="primary-button" onClick={createPartner}>创建账号</button>
               </div>
               {settingsMessage && <div className="settings-message">{settingsMessage}</div>}
             </section>
@@ -2906,17 +3382,18 @@ function SettingsPage({ user, onRequestsChanged }) {
             <section className="settings-block wide-settings">
               <h3>账号列表</h3>
               <table className="settings-table">
-                <thead><tr><th>账号</th><th>角色</th><th>登录密码</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+                <thead><tr><th>账号</th><th>角色</th><th>登录密码</th><th>已授权设备</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
                 <tbody>
                   {users.map((item) => (
                     <tr key={item.id}>
                       <td>{item.username}</td>
-                      <td>{item.role === 'super_admin' ? '超级管理员' : '伙伴管理员'}</td>
-                      <td>{item.role === 'partner_admin' ? (item.initialPassword || '未记录') : '-'}</td>
+                      <td>{item.role === 'super_admin' ? '超级管理员' : item.role === googleDeveloperRole ? 'Google Developer' : '伙伴管理员'}</td>
+                      <td>{item.role !== 'super_admin' ? (item.initialPassword || '未记录') : '-'}</td>
+                      <td>{item.trustedDeviceCount || 0} 台</td>
                       <td>{item.status === 'active' ? '启用' : '停用'}</td>
                       <td>{new Date(item.createdAt).toLocaleString('zh-CN')}</td>
                       <td>
-                        {item.role === 'partner_admin' ? (
+                        {item.role !== 'super_admin' ? (
                           <div className="settings-actions">
                             <button
                               className="secondary-button"

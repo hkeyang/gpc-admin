@@ -1,6 +1,7 @@
 const SESSION_COOKIE = 'gpc_session';
 const SESSION_MAX_AGE = 60 * 60 * 12;
 const DEFAULT_PRODUCTS = [];
+const GOOGLE_DEVELOPER_ROLE = 'google_developer';
 
 export class AuthStore {
   constructor(state, env) {
@@ -29,11 +30,12 @@ export class AuthStore {
       const passwordOk = await verifyPbkdf2(password, user.passwordHash);
       if (!passwordOk) return json({ message: '账号、密码或设备信息错误' }, 401);
 
-      if (user.role === 'super_admin') {
+      if (isTrustedDevice(user, deviceId)) {
         return json({ ok: true, approved: true, user: publicUser(user), deviceId });
       }
 
-      if (isTrustedDevice(user, deviceId)) {
+      if (user.role === 'super_admin' && normalizeTrustedDeviceIds(user.trustedDeviceIds).length === 0) {
+        await trustDevice(this.state, user, deviceId);
         return json({ ok: true, approved: true, user: publicUser(user), deviceId });
       }
 
@@ -44,7 +46,7 @@ export class AuthStore {
           loginRequest.deviceId === deviceId &&
           loginRequest.status === 'pending'
         ) {
-          return json({ ok: true, approved: false, requestId: loginRequest.id, message: '已提交登录申请，等待超级管理员批准' });
+          return json({ ok: true, approved: false, requestId: loginRequest.id, message: '已提交登录申请，请在已登录管理员后台批准' });
         }
       }
 
@@ -58,7 +60,7 @@ export class AuthStore {
         createdAt: new Date().toISOString()
       });
 
-      return json({ ok: true, approved: false, requestId, message: '已提交登录申请，等待超级管理员批准' });
+      return json({ ok: true, approved: false, requestId, message: '已提交登录申请，请在已登录管理员后台批准' });
     }
 
     if (url.pathname === '/login-status' && request.method === 'GET') {
@@ -88,7 +90,7 @@ export class AuthStore {
       const body = await readJson(request);
       const username = String(body.username || '').trim();
       const password = String(body.password || '');
-      const role = body.role === 'super_admin' ? 'super_admin' : 'partner_admin';
+      const role = normalizeUserRole(body.role);
 
       if (!/^[a-zA-Z0-9_@.-]{3,40}$/.test(username)) {
         return json({ message: '账号需为 3-40 位字母、数字或 _ @ . -' }, 400);
@@ -102,7 +104,7 @@ export class AuthStore {
         role,
         status: 'active',
         passwordHash: await hashPbkdf2(password),
-        initialPassword: role === 'partner_admin' ? password : undefined,
+        initialPassword: role !== 'super_admin' ? password : undefined,
         trustedDeviceIds: [],
         createdAt: new Date().toISOString()
       };
@@ -155,6 +157,23 @@ export class AuthStore {
       return json({ ok: true, deleted });
     }
 
+    if (url.pathname === '/google-developer-products' && request.method === 'GET') {
+      const username = url.searchParams.get('username') || '';
+      return json({ products: await this.listGoogleDeveloperProducts(username) });
+    }
+
+    const googleDeveloperProductMatch = url.pathname.match(/^\/google-developer-products\/([^/]+)$/);
+    if (googleDeveloperProductMatch && request.method === 'PUT') {
+      const id = decodeURIComponent(googleDeveloperProductMatch[1]);
+      const existing = await this.state.storage.get(`product:${id}`);
+      if (!existing) return json({ message: '产品不存在' }, 404);
+      const body = await readJson(request);
+      const username = url.searchParams.get('username') || '';
+      const result = await this.saveGoogleDeveloperInfo(existing, body.product || body.info || {}, username);
+      if (result.error) return json({ message: result.error }, 403);
+      return json({ product: result.product });
+    }
+
     if (url.pathname === '/purchase-expenses' && request.method === 'GET') {
       return json({ expenses: await this.listPurchaseExpenses() });
     }
@@ -192,6 +211,15 @@ export class AuthStore {
       if (!existing) return json({ message: '产品不存在' }, 404);
       const body = await readJson(request);
       return json({ product: await this.saveProduct({ ...existing, ...body, id }, id) });
+    }
+
+    const productSettleMatch = url.pathname.match(/^\/products\/([^/]+)\/settle$/);
+    if (productSettleMatch && request.method === 'POST') {
+      const id = decodeURIComponent(productSettleMatch[1]);
+      const existing = await this.state.storage.get(`product:${id}`);
+      if (!existing) return json({ message: '产品不存在' }, 404);
+      const body = await readJson(request);
+      return json({ product: await this.settleProduct(existing, body, id) });
     }
 
     if (url.pathname === '/login-requests' && request.method === 'GET') {
@@ -260,10 +288,7 @@ export class AuthStore {
     await this.ensureDefaultProducts();
     await this.cleanupDuplicateProducts();
     const entries = await this.state.storage.list({ prefix: 'product:' });
-    return [...entries.values()].sort((a, b) => {
-      const dateCompare = String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
-      return dateCompare || Number(b.id || 0) - Number(a.id || 0);
-    });
+    return [...entries.values()].sort((a, b) => compareProductIds(b.id, a.id));
   }
 
   async cleanupDuplicateProducts() {
@@ -301,6 +326,52 @@ export class AuthStore {
   async saveProduct(input, fixedId) {
     const id = fixedId ?? input.id ?? await this.nextProductId();
     const product = sanitizeProduct(input, id);
+    await this.state.storage.put(`product:${product.id}`, product);
+    return product;
+  }
+
+  async listGoogleDeveloperProducts(username = '') {
+    const products = await this.listProducts();
+    return products
+      .filter((product) => canAccessGoogleDeveloperProduct(product, username))
+      .map(publicGoogleDeveloperProduct);
+  }
+
+  async saveGoogleDeveloperInfo(existing, patch, username = '') {
+    if (!canAccessGoogleDeveloperProduct(existing, username)) {
+      return { error: '无权修改该产品的 Google Developer 信息' };
+    }
+    const access = sanitizeGoogleDeveloperAccess({
+      ...existing.googleDeveloperAccess,
+      enabled: true,
+      syncBasicInfo: false,
+      updatedBy: username
+    }, existing);
+    const product = sanitizeProduct({
+      ...existing,
+      ...googleDeveloperProductPatch(patch),
+      googleDeveloperAccess: access
+    }, existing.id);
+    await this.state.storage.put(`product:${product.id}`, product);
+    return { product: publicGoogleDeveloperProduct(product) };
+  }
+
+  async settleProduct(existing, patch, fixedId) {
+    const product = sanitizeProduct({
+      ...existing,
+      settlementStatus: 'settled',
+      settlementExchangeRate: patch.settlementExchangeRate,
+      settlementShareCnyHongKong: patch.settlementShareCnyHongKong,
+      settlementShareCnyWuhan: patch.settlementShareCnyWuhan,
+      settlementHongKongCostUsd: patch.settlementHongKongCostUsd,
+      settlementWuhanCostUsd: patch.settlementWuhanCostUsd,
+      settlementProfitUsd: patch.settlementProfitUsd,
+      settlementHongKongReceivableUsd: patch.settlementHongKongReceivableUsd,
+      settlementWuhanRetainedUsd: patch.settlementWuhanRetainedUsd,
+      settlementHongKongReceivableCny: patch.settlementHongKongReceivableCny,
+      settlementWuhanRetainedCny: patch.settlementWuhanRetainedCny,
+      settledAt: patch.settledAt
+    }, fixedId);
     await this.state.storage.put(`product:${product.id}`, product);
     return product;
   }
@@ -431,6 +502,31 @@ async function handleApi(request, env, url) {
     });
   }
 
+  if (url.pathname === '/api/google-developer-products' && request.method === 'GET') {
+    if (sessionUser.role !== 'super_admin' && sessionUser.role !== GOOGLE_DEVELOPER_ROLE) {
+      return json({ message: '无权查看 Google Developer 页面' }, 403);
+    }
+    const username = sessionUser.role === GOOGLE_DEVELOPER_ROLE ? sessionUser.username : '';
+    return authStore(env).fetch(`https://auth.local/google-developer-products?username=${encodeURIComponent(username)}`);
+  }
+
+  const googleDeveloperProductMatch = url.pathname.match(/^\/api\/google-developer-products\/([^/]+)$/);
+  if (googleDeveloperProductMatch && request.method === 'PUT') {
+    if (sessionUser.role !== 'super_admin' && sessionUser.role !== GOOGLE_DEVELOPER_ROLE) {
+      return json({ message: '无权修改 Google Developer 信息' }, 403);
+    }
+    const username = sessionUser.role === GOOGLE_DEVELOPER_ROLE ? sessionUser.username : '';
+    return authStore(env).fetch(new Request(`https://auth.local/google-developer-products/${googleDeveloperProductMatch[1]}?username=${encodeURIComponent(username)}`, {
+      method: 'PUT',
+      body: await request.text(),
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  if (sessionUser.role === GOOGLE_DEVELOPER_ROLE) {
+    return json({ message: 'Google Developer 账号只能访问英文基础信息页面' }, 403);
+  }
+
   if (url.pathname.startsWith('/api/admin/')) {
     if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以操作' }, 403);
 
@@ -503,6 +599,15 @@ async function handleApi(request, env, url) {
     }));
   }
 
+  const productSettleMatch = url.pathname.match(/^\/api\/products\/([^/]+)\/settle$/);
+  if (productSettleMatch && request.method === 'POST') {
+    return authStore(env).fetch(new Request(`https://auth.local/products/${productSettleMatch[1]}/settle`, {
+      method: 'POST',
+      body: await request.text(),
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
   if (url.pathname === '/api/telegram/push' && request.method === 'POST') {
     return pushTelegramMessage(request, env);
   }
@@ -522,9 +627,10 @@ async function pushTelegramMessage(request, env) {
   const message = body.message ? cleanMessage(body.message) : [
     `账号：${cleanLine(body.account)}`,
     `密码：${cleanLine(body.password)}`,
-    `绑定手机号：${cleanLine(phone)}`,
-    `绑定邮箱：${cleanLine(body.email)}`,
-    `设备安全码：${cleanLine(body.securityCode)}`,
+    `恢复邮箱账号：${cleanLine(body.email)}`,
+    `恢复邮箱密码：${cleanLine(body.recoveryEmailPassword)}`,
+    `恢复手机号：${cleanLine(phone)}`,
+    `备份码：${cleanLine(body.securityCode)}`,
     `VPS登录链接：${cleanLine(body.vpsRemoteUrl)}`
   ].join('\n');
 
@@ -650,8 +756,15 @@ function publicUser(user) {
 function adminUser(user) {
   return {
     ...publicUser(user),
-    initialPassword: user.role === 'partner_admin' ? user.initialPassword || '' : ''
+    trustedDeviceCount: normalizeTrustedDeviceIds(user.trustedDeviceIds).length,
+    initialPassword: user.role !== 'super_admin' ? user.initialPassword || '' : ''
   };
+}
+
+function normalizeUserRole(value) {
+  if (value === 'super_admin') return 'super_admin';
+  if (value === GOOGLE_DEVELOPER_ROLE) return GOOGLE_DEVELOPER_ROLE;
+  return 'partner_admin';
 }
 
 function sanitizeProduct(input, id) {
@@ -663,6 +776,7 @@ function sanitizeProduct(input, id) {
     createdAt: cleanLine(input.createdAt) || now.toISOString().slice(0, 10),
     account: cleanLine(input.account),
     email: cleanLine(input.email),
+    recoveryEmailPassword: cleanLine(input.recoveryEmailPassword),
     phoneCode: cleanLine(input.phoneCode) || '+86',
     phone: cleanLine(input.phone),
     password: cleanLine(input.password),
@@ -673,7 +787,7 @@ function sanitizeProduct(input, id) {
     vpsRemoteUrl: cleanLine(input.vpsRemoteUrl),
     vpsUsername: cleanLine(input.vpsUsername),
     vpsPassword: cleanLine(input.vpsPassword),
-    remark: String(input.remark || '').slice(0, 200),
+    remark: String(input.remark || '').slice(0, 500),
     costs: Array.isArray(input.costs) ? input.costs.map(sanitizeCost).filter(Boolean) : [],
     salePrice: numberOrZero(input.salePrice),
     saleTime: cleanLine(input.saleTime),
@@ -691,14 +805,107 @@ function sanitizeProduct(input, id) {
     settlementWuhanRetainedUsd: nullableNumber(input.settlementWuhanRetainedUsd),
     settlementHongKongReceivableCny: nullableNumber(input.settlementHongKongReceivableCny),
     settlementWuhanRetainedCny: nullableNumber(input.settlementWuhanRetainedCny),
-    saleRemark: String(input.saleRemark || '').slice(0, 200),
+    saleRemark: String(input.saleRemark || '').slice(0, 500),
     accountType: input.accountType === 'enterprise' ? 'enterprise' : input.accountType === 'personal' ? 'personal' : '',
     accountCreationDate: cleanLine(input.accountCreationDate),
     accountCountry: cleanLine(input.accountCountry),
     accountInfoRaw: String(input.accountInfoRaw || '').slice(0, 3000),
     accountInfoFormatted: String(input.accountInfoFormatted || '').slice(0, 3000),
+    googleDeveloperAccess: sanitizeGoogleDeveloperAccess(input.googleDeveloperAccess, input),
     updatedAt
   };
+}
+
+function sanitizeGoogleDeveloperAccess(input = {}, product = {}) {
+  const info = input.info || {};
+  const enabled = Boolean(input.enabled);
+  const syncBasicInfo = Boolean(input.syncBasicInfo);
+  const syncedInfo = syncBasicInfo ? {
+    productName: product.account || product.email,
+    accountEmail: product.email,
+    phoneNumber: [product.phoneCode, product.phone].filter(Boolean).join(' '),
+    accountType: product.accountType,
+    creationDate: product.accountCreationDate,
+    country: product.accountCountry,
+    notes: product.accountInfoRaw || product.accountInfoFormatted || product.remark
+  } : {};
+  const sourceInfo = { ...info, ...syncedInfo };
+  return {
+    enabled,
+    syncBasicInfo,
+    assignedTo: cleanLine(input.assignedTo),
+    info: {
+      productName: cleanLine(sourceInfo.productName || product.account || product.email).slice(0, 160),
+      accountEmail: cleanLine(sourceInfo.accountEmail || product.email).slice(0, 160),
+      phoneNumber: cleanLine(sourceInfo.phoneNumber || [product.phoneCode, product.phone].filter(Boolean).join(' ')).slice(0, 80),
+      accountType: sourceInfo.accountType === 'enterprise' ? 'enterprise' : sourceInfo.accountType === 'personal' ? 'personal' : '',
+      creationDate: cleanLine(sourceInfo.creationDate || product.accountCreationDate).slice(0, 80),
+      country: cleanLine(sourceInfo.country || product.accountCountry).slice(0, 80),
+      onlineApplications: cleanLine(sourceInfo.onlineApplications).slice(0, 120),
+      applicationReleaseDate: cleanLine(sourceInfo.applicationReleaseDate).slice(0, 120),
+      iarcEmailDate: cleanLine(sourceInfo.iarcEmailDate).slice(0, 120),
+      appSize: cleanLine(sourceInfo.appSize).slice(0, 80),
+      sourceCodeKeystore: cleanLine(sourceInfo.sourceCodeKeystore).slice(0, 160),
+      language: cleanLine(sourceInfo.language).slice(0, 80),
+      paymentProfile: cleanLine(sourceInfo.paymentProfile).slice(0, 160),
+      violations: cleanLine(sourceInfo.violations).slice(0, 160),
+      notes: String(sourceInfo.notes || product.accountInfoRaw || product.accountInfoFormatted || '').slice(0, 3000)
+    },
+    updatedBy: cleanLine(input.updatedBy),
+    updatedAt: cleanLine(input.updatedAt) || new Date().toISOString()
+  };
+}
+
+function canAccessGoogleDeveloperProduct(product, username = '') {
+  const access = sanitizeGoogleDeveloperAccess(product?.googleDeveloperAccess, product);
+  if (!access.enabled) return false;
+  const assignedTo = cleanLine(access.assignedTo).toLowerCase();
+  const requester = cleanLine(username).toLowerCase();
+  return !requester || !assignedTo || assignedTo === requester;
+}
+
+function publicGoogleDeveloperProduct(product) {
+  const access = sanitizeGoogleDeveloperAccess(product?.googleDeveloperAccess, product);
+  return {
+    id: product.id,
+    productType: product.productType,
+    createdAt: product.createdAt,
+    account: product.account,
+    email: product.email,
+    recoveryEmailPassword: product.recoveryEmailPassword,
+    phoneCode: product.phoneCode,
+    phone: product.phone,
+    password: product.password,
+    googleAuth: product.googleAuth,
+    securityCode: product.securityCode,
+    vpsRemoteUrl: product.vpsRemoteUrl,
+    remark: product.remark,
+    accountType: product.accountType,
+    accountCreationDate: product.accountCreationDate,
+    accountCountry: product.accountCountry,
+    updatedAt: access.updatedAt || product.updatedAt,
+    googleDeveloperAccess: access
+  };
+}
+
+function googleDeveloperProductPatch(input = {}) {
+  const patch = {
+    createdAt: input.createdAt,
+    account: input.account,
+    email: input.email,
+    recoveryEmailPassword: input.recoveryEmailPassword,
+    phoneCode: input.phoneCode,
+    phone: input.phone,
+    password: input.password,
+    googleAuth: input.googleAuth,
+    securityCode: input.securityCode,
+    vpsRemoteUrl: input.vpsRemoteUrl,
+    remark: input.remark,
+    accountType: input.accountType,
+    accountCreationDate: input.accountCreationDate,
+    accountCountry: input.accountCountry
+  };
+  return Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
 }
 
 function sanitizePurchaseExpense(input, id) {
@@ -717,7 +924,7 @@ function sanitizePurchaseExpense(input, id) {
     id: normalizeProductId(id),
     purchaseDate: cleanLine(input.purchaseDate) || now.toISOString().slice(0, 10),
     itemName: cleanLine(input.itemName).slice(0, 120),
-    quantityRemark: String(input.quantityRemark || '').slice(0, 200),
+    quantityRemark: String(input.quantityRemark || '').slice(0, 500),
     amountUsd,
     exchangeRate: legacyExchangeRate,
     amountCny: legacyAmountCny,
@@ -727,7 +934,7 @@ function sanitizePurchaseExpense(input, id) {
     settledAt: settlementStatus === 'settled'
       ? cleanLine(input.settledAt) || now.toLocaleString('zh-CN', { hour12: false })
       : '',
-    remark: String(input.remark || '').slice(0, 200),
+    remark: String(input.remark || '').slice(0, 500),
     updatedAt: now.toLocaleTimeString('zh-CN', { hour12: false })
   };
 }
@@ -751,6 +958,7 @@ function mergeDuplicateProduct(base, duplicate) {
   const textFields = [
     'account',
     'email',
+    'recoveryEmailPassword',
     'phoneCode',
     'phone',
     'password',
@@ -791,6 +999,9 @@ function mergeDuplicateProduct(base, duplicate) {
 
   if (Array.isArray(duplicate.costs) && sumProductCosts(duplicate) >= sumProductCosts(merged)) {
     merged.costs = duplicate.costs;
+  }
+  if (duplicate.googleDeveloperAccess?.enabled) {
+    merged.googleDeveloperAccess = duplicate.googleDeveloperAccess;
   }
   if (numberOrZero(duplicate.salePrice) > 0) merged.salePrice = numberOrZero(duplicate.salePrice);
 
