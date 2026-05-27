@@ -631,6 +631,7 @@ async function pushTelegramMessage(request, env) {
     `恢复邮箱密码：${cleanLine(body.recoveryEmailPassword)}`,
     `恢复手机号：${cleanLine(phone)}`,
     `备份码：${cleanLine(body.securityCode)}`,
+    `手机接码：${cleanLine(body.phoneSmsCode)}`,
     `VPS登录链接：${cleanLine(body.vpsRemoteUrl)}`
   ].join('\n');
 
@@ -782,6 +783,7 @@ function sanitizeProduct(input, id) {
     password: cleanLine(input.password),
     googleAuth: cleanLine(input.googleAuth),
     securityCode: cleanLine(input.securityCode),
+    phoneSmsCode: cleanLine(input.phoneSmsCode),
     smsLink: cleanLine(input.smsLink),
     vpsIp: cleanLine(input.vpsIp),
     vpsRemoteUrl: cleanLine(input.vpsRemoteUrl),
@@ -878,6 +880,7 @@ function publicGoogleDeveloperProduct(product) {
     password: product.password,
     googleAuth: product.googleAuth,
     securityCode: product.securityCode,
+    phoneSmsCode: product.phoneSmsCode,
     vpsRemoteUrl: product.vpsRemoteUrl,
     remark: product.remark,
     accountType: product.accountType,
@@ -899,6 +902,7 @@ function googleDeveloperProductPatch(input = {}) {
     password: input.password,
     googleAuth: input.googleAuth,
     securityCode: input.securityCode,
+    phoneSmsCode: input.phoneSmsCode,
     vpsRemoteUrl: input.vpsRemoteUrl,
     remark: input.remark,
     accountType: input.accountType,
@@ -965,6 +969,7 @@ function mergeDuplicateProduct(base, duplicate) {
     'productType',
     'googleAuth',
     'securityCode',
+    'phoneSmsCode',
     'smsLink',
     'vpsIp',
     'vpsRemoteUrl',

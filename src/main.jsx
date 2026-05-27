@@ -67,7 +67,7 @@ const businessTypes = [
     shortLabel: '谷歌',
     navId: 'products-google',
     costLabels: ['账号成本', 'VPS', 'ESIM', '写卡器', '其他成本'],
-    pushFields: ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'securityCode', 'vpsRemoteUrl', 'remark']
+    pushFields: ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'securityCode', 'phoneSmsCode', 'vpsRemoteUrl', 'remark']
   },
   {
     id: 'appleDeveloper',
@@ -93,10 +93,11 @@ const pushFieldOptions = [
   { key: 'googleAuth', label: '谷歌验证器', placeholder: '{googleAuth}' },
   { key: 'smsLink', label: '接码链接', placeholder: '{smsLink}' },
   { key: 'securityCode', label: '备份码', placeholder: '{securityCode}' },
+  { key: 'phoneSmsCode', label: '手机接码', placeholder: '{phoneSmsCode}' },
   { key: 'vpsRemoteUrl', label: 'VPS登录链接', placeholder: '{vpsRemoteUrl}' },
   { key: 'remark', label: '备注', placeholder: '{remark}' }
 ];
-const defaultPushTemplateFields = ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'securityCode', 'vpsRemoteUrl'];
+const defaultPushTemplateFields = ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'securityCode', 'phoneSmsCode', 'vpsRemoteUrl'];
 
 function businessTypeConfig(productType) {
   return businessTypes.find((item) => item.id === productType) || businessTypes[0];
@@ -116,7 +117,7 @@ function pushOptionsForType(productType) {
 }
 
 function defaultPushFieldsForType(productType) {
-  return pushOptionsForType(productType).slice(0, productType === 'appleDeveloper' ? 6 : 7).map((item) => item.key);
+  return pushOptionsForType(productType).slice(0, productType === 'appleDeveloper' ? 6 : 8).map((item) => item.key);
 }
 
 function createPushFormat(fields = defaultPushTemplateFields, productType = defaultBusinessType) {
@@ -217,6 +218,7 @@ function createBlankProduct(productType = defaultBusinessType) {
     password: '',
     googleAuth: '',
     securityCode: '',
+    phoneSmsCode: '',
     smsLink: '',
     vpsIp: '',
     vpsRemoteUrl: '',
@@ -998,6 +1000,7 @@ function App() {
       password: '',
       googleAuth: '',
       securityCode: '',
+      phoneSmsCode: '',
       smsLink: '',
       vpsIp: '',
       vpsRemoteUrl: '',
@@ -2604,6 +2607,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
               {isAppleDeveloper && <Input label="接码链接" value={draft.smsLink} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('smsLink', value)} />}
               {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="谷歌验证器" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />}
               {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="备份码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />}
+              {!isAppleDeveloper && <Input label="手机接码" value={draft.phoneSmsCode} copyable onOpenFull={openFullValue} onChange={(value) => updateField('phoneSmsCode', value)} />}
               {!isAppleDeveloper && <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />}
               <label className="input-label">
                 <span>账号类型</span>
@@ -3195,6 +3199,7 @@ function GoogleDeveloperPage({ products, user, saving, activeId, onActiveChange,
                 <GoogleDeveloperPhoneInput product={draft} copyable onChange={updatePhone} />
                 <SecretInput label="Google Authenticator" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />
                 <SecretInput label="Backup Codes" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />
+                <Input label="Phone SMS Code" value={draft.phoneSmsCode} copyable onChange={(value) => updateField('phoneSmsCode', value)} />
                 <Input label="VPS Remote Link" value={draft.vpsRemoteUrl} wide copyable onChange={(value) => updateField('vpsRemoteUrl', value)} />
                 <label className="input-label">
                   <span>Account Type</span>
