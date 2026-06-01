@@ -1722,7 +1722,7 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
                 <tr key={item.id} onClick={() => onOpenWorkbench(item.id)}>
                   <td>{item.id}</td>
                   <td>{businessTypeConfig(productBusinessType(item)).shortLabel}</td>
-                  <td className="account-list-cell" title={item.account || item.email || ''}>{shortAccountLabel(item.account || item.email)}</td>
+                  <td>{item.account}</td>
                   <td><StatusBadge label={productStatus(item)} /></td>
                   <td>{money(Math.max(productProfit(item), 0))}</td>
                   <td>{item.updatedAt}</td>
@@ -1997,7 +1997,7 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
             <tr key={item.id}>
               <td>{item.id}</td>
               <td>{productDateValue(item)}</td>
-              <td className="account-list-cell"><CopyableAccountCell value={item.account || item.email} /></td>
+              <td><CopyableAccountCell value={item.account || item.email} /></td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
@@ -2364,7 +2364,7 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
                   <tr key={product.id} className={activeProduct?.id === product.id ? 'selected-row' : ''} onClick={() => setActiveId(product.id)}>
                     <td>{businessTypeConfig(productBusinessType(product)).shortLabel}</td>
                     <td>{productDateValue(product)}</td>
-                    <td className="account-list-cell"><CopyableAccountCell value={product.account || product.email} /></td>
+                    <td><CopyableAccountCell value={product.account || product.email} /></td>
                     <td>{monthLabel(product.accountCreationDate) || '-'}</td>
                     <td>
                       <select
@@ -2428,7 +2428,6 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
 function CopyableAccountCell({ value }) {
   const [copied, setCopied] = useState(false);
   const text = String(value || '');
-  const displayText = shortAccountLabel(text);
   const copyAccount = async () => {
     if (!text) return;
     try {
@@ -2441,16 +2440,11 @@ function CopyableAccountCell({ value }) {
   };
 
   return (
-    <span className="copyable-account" title={text ? `双击复制完整账号：${text}` : '暂无账号'} onDoubleClick={copyAccount}>
-      <span>{displayText}</span>
+    <span className="copyable-account" title="双击复制邮箱" onDoubleClick={copyAccount}>
+      <span>{text}</span>
       {copied && <em>已复制</em>}
     </span>
   );
-}
-
-function shortAccountLabel(value) {
-  const text = String(value || '').trim();
-  return text ? text.slice(0, 5) : '-';
 }
 
 function EmptyState({ icon: Icon, title, text }) {

@@ -431,11 +431,11 @@ nav { display: grid; gap: 8px; }
 .alert-row b { font-size: 14px; justify-self: end; overflow-wrap: anywhere; text-align: right; }
 
 .mini-table, .product-table { width: 100%; border-collapse: collapse; }
-.product-table { table-layout: fixed; min-width: 890px; }
+.product-table { table-layout: fixed; min-width: 960px; }
 .product-table th, .product-table td { overflow: hidden; text-overflow: ellipsis; }
 .product-table th:nth-child(1), .product-table td:nth-child(1) { width: 34px; }
 .product-table th:nth-child(2), .product-table td:nth-child(2) { width: 92px; }
-.product-table th:nth-child(3), .product-table td:nth-child(3) { width: 56px; }
+.product-table th:nth-child(3), .product-table td:nth-child(3) { width: 118px; }
 .product-table th:nth-child(4), .product-table td:nth-child(4) { width: 88px; }
 .product-table th:nth-child(5), .product-table td:nth-child(5) { width: 88px; }
 .product-table th:nth-child(6), .product-table td:nth-child(6) { width: 88px; }
@@ -444,7 +444,6 @@ nav { display: grid; gap: 8px; }
 .product-table th:nth-child(9), .product-table td:nth-child(9) { width: 82px; }
 .product-table th:nth-child(10), .product-table td:nth-child(10) { width: 112px; }
 .mini-table th, .mini-table td { min-height: 33px; padding: 9px 12px; text-align: left; font-size: 12px; border-bottom: 1px solid #f0f2f8; line-height: 1.4; overflow-wrap: anywhere; }
-.mini-table .account-list-cell { width: 58px; max-width: 58px; overflow: hidden; text-overflow: clip; white-space: nowrap; }
 .mini-table th { color: #68758b; background: #fbfcff; font-weight: 800; }
 .mini-table td { color: #586377; }
 .mini-table tr { cursor: pointer; }
@@ -533,16 +532,14 @@ nav { display: grid; gap: 8px; }
 .copyable-account {
   position: relative;
   display: inline-block;
-  width: 5ch;
-  max-width: 5ch;
+  max-width: 100%;
   cursor: copy;
   vertical-align: middle;
 }
 .copyable-account > span {
   display: block;
   overflow: hidden;
-  text-overflow: clip;
-  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .copyable-account em {
   position: absolute;
@@ -1147,7 +1144,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
 .account-details-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(320px, .72fr); gap: 14px; align-items: start; }
 .account-table-panel { min-width: 0; }
 .account-table-wrap { width: 100%; overflow: auto; }
-.account-detail-table { min-width: 860px; }
+.account-detail-table { min-width: 980px; }
 .account-detail-table tr.selected-row td { background: #f7f5ff; }
 .account-detail-table tr { cursor: pointer; }
 .table-select {
@@ -1418,7 +1415,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
     grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(154px, 180px);
     min-width: max-content;
   }
-  .product-table { min-width: 860px; }
+  .product-table { min-width: 900px; }
   .list-panel { overflow-x: auto; }
   .settlement-info-card { width: 100%; margin-left: 0; }
   .section-action { width: 100%; margin-left: 0; }
