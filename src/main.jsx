@@ -67,7 +67,7 @@ const businessTypes = [
     shortLabel: '谷歌',
     navId: 'products-google',
     costLabels: ['账号成本', 'VPS', 'ESIM', '写卡器', '其他成本'],
-    pushFields: ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'securityCode', 'phoneSmsCode', 'vpsRemoteUrl', 'remark']
+    pushFields: ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'authenticatorCodeUrl', 'securityCode', 'phoneSmsCode', 'vpsRemoteUrl', 'remark']
   },
   {
     id: 'appleDeveloper',
@@ -84,6 +84,7 @@ const costOwners = {
   wuhan: 'wuhan'
 };
 const pushTemplateStorageKey = 'gpc_push_templates';
+const authenticatorCodeUrl = 'https://2fa.aisea.space/';
 const pushFieldOptions = [
   { key: 'account', label: '账号', placeholder: '{account}' },
   { key: 'password', label: '密码', placeholder: '{password}' },
@@ -91,13 +92,14 @@ const pushFieldOptions = [
   { key: 'recoveryEmailPassword', label: '恢复邮箱密码', placeholder: '{recoveryEmailPassword}' },
   { key: 'phone', label: '恢复手机号', placeholder: '{phone}' },
   { key: 'googleAuth', label: '谷歌验证器', placeholder: '{googleAuth}' },
+  { key: 'authenticatorCodeUrl', label: '验证器接码', placeholder: '{authenticatorCodeUrl}' },
   { key: 'smsLink', label: '接码链接', placeholder: '{smsLink}' },
   { key: 'securityCode', label: '备份码', placeholder: '{securityCode}' },
   { key: 'phoneSmsCode', label: '手机接码', placeholder: '{phoneSmsCode}' },
   { key: 'vpsRemoteUrl', label: 'VPS登录链接', placeholder: '{vpsRemoteUrl}' },
   { key: 'remark', label: '备注', placeholder: '{remark}' }
 ];
-const defaultPushTemplateFields = ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'securityCode', 'phoneSmsCode', 'vpsRemoteUrl'];
+const defaultPushTemplateFields = ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'authenticatorCodeUrl', 'securityCode', 'phoneSmsCode', 'vpsRemoteUrl'];
 
 function businessTypeConfig(productType) {
   return businessTypes.find((item) => item.id === productType) || businessTypes[0];
@@ -737,7 +739,11 @@ function normalizePushTemplates(value) {
     const fieldOptions = pushOptionsForType(scene);
     const fieldKeys = new Set(fieldOptions.map((item) => item.key));
     const fallbackFields = defaultPushFieldsForType(scene);
-    const fields = (Array.isArray(template.fields) && template.fields.length ? template.fields : fallbackFields)
+    const storedFields = Array.isArray(template.fields) && template.fields.length ? template.fields : fallbackFields;
+    const migratedFields = scene === 'googleDeveloper' && template.id === 'list-default' && !storedFields.includes('authenticatorCodeUrl')
+      ? insertAfterField(storedFields, 'googleAuth', 'authenticatorCodeUrl')
+      : storedFields;
+    const fields = migratedFields
       .filter((field) => fieldKeys.has(field));
     return {
       id: template.id || `push-${Date.now()}-${index}`,
@@ -752,6 +758,17 @@ function normalizePushTemplates(value) {
   return [
     ...normalized,
     ...defaultPushTemplates.filter((template) => !scenes.has(template.scene))
+  ];
+}
+
+function insertAfterField(fields, anchor, inserted) {
+  if (fields.includes(inserted)) return fields;
+  const anchorIndex = fields.indexOf(anchor);
+  if (anchorIndex < 0) return [...fields, inserted];
+  return [
+    ...fields.slice(0, anchorIndex + 1),
+    inserted,
+    ...fields.slice(anchorIndex + 1)
   ];
 }
 
@@ -778,7 +795,62 @@ function readStoredPushTemplates() {
 
 function productPushValue(product, key) {
   if (key === 'phone') return formatPhoneNumber(product.phoneCode, product.phone);
+  if (key === 'authenticatorCodeUrl') return authenticatorCodeUrl;
   return product[key] ?? '';
+}
+
+function normalizeAuthenticatorSecret(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^otpauth:\/\//i.test(text)) {
+    try {
+      const parsed = new URL(text);
+      return parsed.searchParams.get('secret') || '';
+    } catch {
+      return '';
+    }
+  }
+  return text;
+}
+
+function decodeBase32Secret(value) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+  const clean = normalizeAuthenticatorSecret(value).toUpperCase().replace(/[^A-Z2-7]/g, '');
+  if (!clean) throw new Error('请先填写谷歌验证器密钥。');
+  let bits = '';
+  const bytes = [];
+  for (const char of clean) {
+    const index = alphabet.indexOf(char);
+    if (index < 0) throw new Error('密钥格式不正确，请检查是否为 Base32。');
+    bits += index.toString(2).padStart(5, '0');
+    while (bits.length >= 8) {
+      bytes.push(Number.parseInt(bits.slice(0, 8), 2));
+      bits = bits.slice(8);
+    }
+  }
+  return new Uint8Array(bytes);
+}
+
+async function generateTotpCode(secret, time = Date.now()) {
+  const keyBytes = decodeBase32Secret(secret);
+  const counter = Math.floor(time / 1000 / 30);
+  const buffer = new ArrayBuffer(8);
+  const view = new DataView(buffer);
+  view.setUint32(4, counter);
+  const cryptoKey = await window.crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'HMAC', hash: 'SHA-1' },
+    false,
+    ['sign']
+  );
+  const digest = new Uint8Array(await window.crypto.subtle.sign('HMAC', cryptoKey, buffer));
+  const offset = digest[digest.length - 1] & 0xf;
+  const binary = ((digest[offset] & 0x7f) << 24)
+    | ((digest[offset + 1] & 0xff) << 16)
+    | ((digest[offset + 2] & 0xff) << 8)
+    | (digest[offset + 3] & 0xff);
+  return String(binary % 1000000).padStart(6, '0');
 }
 
 function formatPhoneNumber(phoneCode, phone) {
@@ -1650,7 +1722,7 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
                 <tr key={item.id} onClick={() => onOpenWorkbench(item.id)}>
                   <td>{item.id}</td>
                   <td>{businessTypeConfig(productBusinessType(item)).shortLabel}</td>
-                  <td>{item.account}</td>
+                  <td className="account-list-cell" title={item.account || item.email || ''}>{shortAccountLabel(item.account || item.email)}</td>
                   <td><StatusBadge label={productStatus(item)} /></td>
                   <td>{money(Math.max(productProfit(item), 0))}</td>
                   <td>{item.updatedAt}</td>
@@ -1925,7 +1997,7 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
             <tr key={item.id}>
               <td>{item.id}</td>
               <td>{productDateValue(item)}</td>
-              <td><CopyableAccountCell value={item.account || item.email} /></td>
+              <td className="account-list-cell"><CopyableAccountCell value={item.account || item.email} /></td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
@@ -2292,7 +2364,7 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
                   <tr key={product.id} className={activeProduct?.id === product.id ? 'selected-row' : ''} onClick={() => setActiveId(product.id)}>
                     <td>{businessTypeConfig(productBusinessType(product)).shortLabel}</td>
                     <td>{productDateValue(product)}</td>
-                    <td><CopyableAccountCell value={product.account || product.email} /></td>
+                    <td className="account-list-cell"><CopyableAccountCell value={product.account || product.email} /></td>
                     <td>{monthLabel(product.accountCreationDate) || '-'}</td>
                     <td>
                       <select
@@ -2356,6 +2428,7 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
 function CopyableAccountCell({ value }) {
   const [copied, setCopied] = useState(false);
   const text = String(value || '');
+  const displayText = shortAccountLabel(text);
   const copyAccount = async () => {
     if (!text) return;
     try {
@@ -2368,11 +2441,16 @@ function CopyableAccountCell({ value }) {
   };
 
   return (
-    <span className="copyable-account" title="双击复制邮箱" onDoubleClick={copyAccount}>
-      <span>{text}</span>
+    <span className="copyable-account" title={text ? `双击复制完整账号：${text}` : '暂无账号'} onDoubleClick={copyAccount}>
+      <span>{displayText}</span>
       {copied && <em>已复制</em>}
     </span>
   );
+}
+
+function shortAccountLabel(value) {
+  const text = String(value || '').trim();
+  return text ? text.slice(0, 5) : '-';
 }
 
 function EmptyState({ icon: Icon, title, text }) {
@@ -2395,6 +2473,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
   const [settlementNotice, setSettlementNotice] = useState('');
   const [settling, setSettling] = useState(false);
   const [fullView, setFullView] = useState(null);
+  const [authenticatorCode, setAuthenticatorCode] = useState({ code: '', seconds: 0, message: '' });
   const settlement = settlementAmounts(draft);
   const canEditCredentials = user?.role === 'super_admin';
   const isNewProduct = String(draft.id).startsWith('draft-');
@@ -2407,9 +2486,28 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
     setDirty(false);
     setNotice('');
     setSettlementNotice('');
+    setAuthenticatorCode({ code: '', seconds: 0, message: '' });
     setCostDraft({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
     setShowCostForm(false);
   }, [product?.id]);
+
+  useEffect(() => {
+    if (!authenticatorCode.code) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const code = await generateTotpCode(draft.googleAuth);
+        setAuthenticatorCode((current) => current.code ? ({
+          ...current,
+          code,
+          seconds: 30 - (Math.floor(Date.now() / 1000) % 30),
+          message: ''
+        }) : current);
+      } catch (error) {
+        setAuthenticatorCode({ code: '', seconds: 0, message: error.message || '验证码生成失败，请检查密钥。' });
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [authenticatorCode.code, draft.googleAuth]);
 
   const commitChange = (patch) => {
     try {
@@ -2565,6 +2663,19 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
   const openFullValue = (label, value) => {
     setFullView({ label, value: String(value || '') });
   };
+  const showAuthenticatorCode = async () => {
+    try {
+      const code = await generateTotpCode(draft.googleAuth);
+      setAuthenticatorCode({
+        code,
+        seconds: 30 - (Math.floor(Date.now() / 1000) % 30),
+        message: ''
+      });
+      await navigator.clipboard?.writeText(code);
+    } catch (error) {
+      setAuthenticatorCode({ code: '', seconds: 0, message: error.message || '验证码生成失败，请检查密钥。' });
+    }
+  };
   const saveDraft = async () => {
     setNotice('');
     const result = await onSave(draft);
@@ -2605,7 +2716,8 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
               <SecretInput readOnly={!canEditCredentials} label="恢复邮箱密码" value={draft.recoveryEmailPassword} visible={visible.recoveryEmailPassword} onToggle={() => setVisible({ ...visible, recoveryEmailPassword: !visible.recoveryEmailPassword })} onChange={(value) => updateField('recoveryEmailPassword', value)} onOpenFull={openFullValue} />
               <PhoneInput product={draft} copyable onChange={(patch) => commitChange(patch)} />
               {isAppleDeveloper && <Input label="接码链接" value={draft.smsLink} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('smsLink', value)} />}
-              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="谷歌验证器" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} />}
+              {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="谷歌验证器" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} actionLabel={authenticatorCode.code ? `${authenticatorCode.code} · ${authenticatorCode.seconds}s` : '6位码'} onAction={showAuthenticatorCode} actionDisabled={!draft.googleAuth} actionTitle="生成并复制当前6位验证码" />}
+              {!isAppleDeveloper && authenticatorCode.message && <div className="field-note">{authenticatorCode.message}</div>}
               {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="备份码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />}
               {!isAppleDeveloper && <Input label="手机接码" value={draft.phoneSmsCode} copyable onOpenFull={openFullValue} onChange={(value) => updateField('phoneSmsCode', value)} />}
               {!isAppleDeveloper && <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />}
@@ -2888,7 +3000,7 @@ function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabl
   );
 }
 
-function SecretInput({ label, value, visible, onToggle, onChange, disabled = false, readOnly = false, onOpenFull }) {
+function SecretInput({ label, value, visible, onToggle, onChange, disabled = false, readOnly = false, onOpenFull, actionLabel, onAction, actionDisabled = false, actionTitle }) {
   const canReveal = !disabled;
   const text = String(value || '');
   return (
@@ -2896,6 +3008,7 @@ function SecretInput({ label, value, visible, onToggle, onChange, disabled = fal
       <span>{label}</span>
       <div className="input-shell" onDoubleClick={() => canReveal && onOpenFull?.(label, text)} title="双击查看完整内容">
         <input readOnly={readOnly} disabled={disabled} type={visible && canReveal ? 'text' : 'password'} value={disabled ? '********' : (value || '')} onChange={(event) => !readOnly && onChange(event.target.value)} />
+        {actionLabel && <button className="input-text-button" disabled={!canReveal || actionDisabled} type="button" title={actionTitle} onClick={(event) => { event.stopPropagation(); onAction?.(); }}>{actionLabel}</button>}
         <button disabled={!canReveal} type="button" onClick={(event) => { event.stopPropagation(); onToggle(); }}>{visible ? <EyeOff size={15} /> : <Eye size={15} />}</button>
         <CopyFieldButton value={text} disabled={!canReveal} />
       </div>
