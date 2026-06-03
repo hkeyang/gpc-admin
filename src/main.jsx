@@ -62,6 +62,11 @@ const defaultExchangeRate = 6.84;
 const exchangeRateSource = 'Frankfurter';
 const googleDeveloperRole = 'google_developer';
 const googleDeveloperPageId = 'google-developer';
+const googleDeveloperDefaults = {
+  phoneCode: '+1',
+  accountType: 'enterprise',
+  accountCountry: 'US'
+};
 const businessTypes = [
   {
     id: 'googleDeveloper',
@@ -284,15 +289,17 @@ function createBlankCosts(productType = defaultBusinessType) {
 
 function createBlankProduct(productType = defaultBusinessType) {
   const createdAt = localDateInput();
+  const normalizedType = businessTypeConfig(productType).id;
+  const isGoogleDeveloperProduct = normalizedType === 'googleDeveloper';
   return {
     id: '',
-    productType: businessTypeConfig(productType).id,
+    productType: normalizedType,
     availabilityStatus: availabilityStatuses.preparing,
     createdAt,
     account: '',
     email: '',
     recoveryEmailPassword: '',
-    phoneCode: '+86',
+    phoneCode: isGoogleDeveloperProduct ? googleDeveloperDefaults.phoneCode : '+86',
     phone: '',
     password: '',
     googleAuth: '',
@@ -321,9 +328,9 @@ function createBlankProduct(productType = defaultBusinessType) {
     settlementWuhanRetainedUsd: null,
     settlementHongKongReceivableCny: null,
     settlementWuhanRetainedCny: null,
-    accountType: '',
+    accountType: isGoogleDeveloperProduct ? googleDeveloperDefaults.accountType : '',
     accountCreationDate: '',
-    accountCountry: '',
+    accountCountry: isGoogleDeveloperProduct ? googleDeveloperDefaults.accountCountry : '',
     accountInfoRaw: '',
     accountInfoFormatted: '',
     phoneRenewal: createBlankPhoneRenewal({ createdAt }),
@@ -1121,6 +1128,7 @@ function App() {
   const [products, setProducts] = useState(initialProducts);
   const [purchaseExpenses, setPurchaseExpenses] = useState([]);
   const [activeId, setActiveId] = useState(initialProducts[0]?.id || 1);
+  const [phoneRenewalTargetId, setPhoneRenewalTargetId] = useState(null);
   const [draftProduct, setDraftProduct] = useState(null);
   const [productSync, setProductSync] = useState({ loading: false, saving: false, message: '' });
   const [purchaseExpenseSync, setPurchaseExpenseSync] = useState({ loading: false, saving: false, message: '' });
@@ -1218,6 +1226,11 @@ function App() {
     window.history.replaceState(null, '', `#/${nextPage}`);
   };
 
+  const openPhoneRenewals = (productId = null) => {
+    setPhoneRenewalTargetId(productId);
+    setPage('phone-renewals');
+  };
+
   useEffect(() => {
     if (authState.authenticated && isGoogleDeveloperUser && page !== googleDeveloperPageId) {
       setPage(googleDeveloperPageId);
@@ -1293,6 +1306,7 @@ function App() {
     const now = new Date();
     const nextId = maxNumericProductId(products) + 1;
     const normalizedType = businessTypeConfig(productType).id;
+    const isGoogleDeveloperProduct = normalizedType === 'googleDeveloper';
     const nextProduct = {
       id: nextId,
       productType: normalizedType,
@@ -1301,7 +1315,7 @@ function App() {
       account: `new_product_${nextId}`,
       email: '',
       recoveryEmailPassword: '',
-      phoneCode: '+86',
+      phoneCode: isGoogleDeveloperProduct ? googleDeveloperDefaults.phoneCode : '+86',
       phone: '',
       password: '',
       googleAuth: '',
@@ -1330,9 +1344,9 @@ function App() {
       settlementWuhanRetainedUsd: null,
       settlementHongKongReceivableCny: null,
       settlementWuhanRetainedCny: null,
-      accountType: '',
+      accountType: isGoogleDeveloperProduct ? googleDeveloperDefaults.accountType : '',
       accountCreationDate: '',
-      accountCountry: '',
+      accountCountry: isGoogleDeveloperProduct ? googleDeveloperDefaults.accountCountry : '',
       accountInfoRaw: '',
       accountInfoFormatted: '',
       phoneRenewal: createBlankPhoneRenewal({ createdAt: now.toISOString().slice(0, 10) }),
@@ -1587,7 +1601,6 @@ function App() {
               exchangeRate={exchangeRate}
               pushTemplate={listPushTemplate(productType)}
               onAddProduct={() => addProduct(productType)}
-              onOpenPhoneRenewals={() => setPage('phone-renewals')}
               onOpenWorkbench={(id) => {
                 setActiveId(id);
                 setPage('workbench');
@@ -1596,7 +1609,7 @@ function App() {
           );
         })()}
         {!isGoogleDeveloperUser && page === 'account-details' && <AccountDetailsPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
-        {!isGoogleDeveloperUser && page === 'phone-renewals' && <PhoneRenewalPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
+        {!isGoogleDeveloperUser && page === 'phone-renewals' && <PhoneRenewalPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} targetProductId={phoneRenewalTargetId} />}
         {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'purchase-expenses' && (
           <PurchaseExpensesPage
@@ -1610,7 +1623,7 @@ function App() {
         )}
         {purchaseExpenseSync.message && <div className="global-notice"><Info size={15} />{purchaseExpenseSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'workbench' && activeProduct && (
-          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} saving={productSync.saving} />
+          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={openPhoneRenewals} saving={productSync.saving} />
         )}
         {!isGoogleDeveloperUser && page === 'push-settings' && (
           <PushSettingsPage
@@ -2070,7 +2083,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, onOpenPhoneRenewals, title }) {
+function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, title }) {
   const [keyword, setKeyword] = useState('');
   const [availabilityFilter, setAvailabilityFilter] = useState('在售列表');
   const [saleFilter, setSaleFilter] = useState('全部');
@@ -2165,7 +2178,7 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
             <EmptyState icon={Search} title="没有匹配结果" text="换一个关键词，或清空库存、销售、回款、结算筛选条件。" />
           ) : (
             <>
-              <ProductTable products={paginatedProducts} onOpenWorkbench={onOpenWorkbench} onOpenPhoneRenewals={onOpenPhoneRenewals} onPushProduct={pushProduct} pushingId={pushState.productId} />
+              <ProductTable products={paginatedProducts} onOpenWorkbench={onOpenWorkbench} onPushProduct={pushProduct} pushingId={pushState.productId} />
               <div className="pagination">
                 <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
                   <option value={5}>5 条/页</option>
@@ -2230,12 +2243,12 @@ function DateRangeFilter({ from, to, onFromChange, onToChange }) {
   );
 }
 
-function ProductTable({ products, onOpenWorkbench, onOpenPhoneRenewals, onPushProduct, pushingId }) {
+function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
   return (
     <table className="product-table product-list-table">
       <thead>
         <tr>
-          <th>ID</th><th>上架时间</th><th>账号</th><th>手机号续费</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
+          <th>ID</th><th>上架时间</th><th>账号</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -2247,7 +2260,6 @@ function ProductTable({ products, onOpenWorkbench, onOpenPhoneRenewals, onPushPr
               <td>{item.id}</td>
               <td>{productDateValue(item)}</td>
               <td><CopyableAccountCell value={item.account || item.email} /></td>
-              <td><PhoneRenewalCell product={item} onOpenPhoneRenewals={onOpenPhoneRenewals} /></td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
@@ -2264,17 +2276,6 @@ function ProductTable({ products, onOpenWorkbench, onOpenPhoneRenewals, onPushPr
         })}
       </tbody>
     </table>
-  );
-}
-
-function PhoneRenewalCell({ product, onOpenPhoneRenewals }) {
-  const info = phoneRenewalInfo(product);
-  if (!info.phone) return <span className="muted-text">无手机号</span>;
-  return (
-    <button className="renewal-status-cell" type="button" onClick={onOpenPhoneRenewals} title="打开手机号续费">
-      <StatusBadge label={info.label} />
-      <span>{info.currentExpiresAt || '-'}</span>
-    </button>
   );
 }
 
@@ -2687,7 +2688,7 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
   );
 }
 
-function PhoneRenewalPage({ products, onSaveProduct, saving }) {
+function PhoneRenewalPage({ products, onSaveProduct, saving, targetProductId }) {
   const [keyword, setKeyword] = useState('');
   const [businessFilter, setBusinessFilter] = useState('全部');
   const [statusFilter, setStatusFilter] = useState('待处理');
@@ -2701,6 +2702,15 @@ function PhoneRenewalPage({ products, onSaveProduct, saving }) {
       .map((product) => phoneRenewalInfo(product, today))
       .filter((item) => item.phone);
   }, [products, today]);
+
+  useEffect(() => {
+    if (!targetProductId) return;
+    const target = rows.find((item) => String(item.product.id) === String(targetProductId));
+    setStatusFilter('全部');
+    setBusinessFilter('全部');
+    setKeyword(target?.phone || String(targetProductId));
+  }, [targetProductId, rows]);
+
   const filteredRows = useMemo(() => {
     const text = keyword.trim().toLowerCase();
     return rows.filter((item) => {
@@ -2708,7 +2718,8 @@ function PhoneRenewalPage({ products, onSaveProduct, saving }) {
         item.product.id,
         item.product.account,
         item.product.email,
-        item.phone
+        item.phone,
+        availabilityStatusLabel(item.product)
       ].join(' ').toLowerCase().includes(text);
       const businessLabel = businessTypeConfig(productBusinessType(item.product)).label;
       const matchesBusiness = businessFilter === '全部' || businessLabel === businessFilter;
@@ -2727,6 +2738,14 @@ function PhoneRenewalPage({ products, onSaveProduct, saving }) {
     expired: rows.filter((item) => item.status === 'expired').length,
     maxReached: rows.filter((item) => item.status === 'max_reached').length
   }), [rows]);
+
+  useEffect(() => {
+    if (!targetProductId || !filteredRows.some((item) => String(item.product.id) === String(targetProductId))) return;
+    const timer = window.setTimeout(() => {
+      document.getElementById(`phone-renewal-row-${targetProductId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [targetProductId, filteredRows]);
 
   const toggleSelected = (id, checked) => {
     setSelectedIds((current) => checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id));
@@ -2807,6 +2826,7 @@ function PhoneRenewalPage({ products, onSaveProduct, saving }) {
                 <tr>
                   <th>选</th>
                   <th>业务</th>
+                  <th>库存</th>
                   <th>账号</th>
                   <th>手机号</th>
                   <th>购买日</th>
@@ -2819,7 +2839,11 @@ function PhoneRenewalPage({ products, onSaveProduct, saving }) {
               </thead>
               <tbody>
                 {filteredRows.map((item) => (
-                  <tr key={item.product.id}>
+                  <tr
+                    key={item.product.id}
+                    id={`phone-renewal-row-${item.product.id}`}
+                    className={String(item.product.id) === String(targetProductId) ? 'target-renewal-row' : ''}
+                  >
                     <td>
                       <input
                         type="checkbox"
@@ -2829,6 +2853,7 @@ function PhoneRenewalPage({ products, onSaveProduct, saving }) {
                       />
                     </td>
                     <td>{businessTypeConfig(productBusinessType(item.product)).shortLabel}</td>
+                    <td><StatusBadge label={availabilityStatusLabel(item.product)} /></td>
                     <td><CopyableAccountCell value={item.product.account || item.product.email} /></td>
                     <td>{item.phone}</td>
                     <td><input className="table-date-input" type="date" value={item.renewal.purchasedAt} onChange={(event) => updateRenewal(item.product, { purchasedAt: event.target.value })} /></td>
@@ -2847,7 +2872,7 @@ function PhoneRenewalPage({ products, onSaveProduct, saving }) {
                     </td>
                   </tr>
                 ))}
-                {!filteredRows.length && <tr><td colSpan={10}>暂无匹配的手机号续费记录</td></tr>}
+                {!filteredRows.length && <tr><td colSpan={11}>暂无匹配的手机号续费记录</td></tr>}
               </tbody>
             </table>
           </div>
@@ -2902,7 +2927,7 @@ function EmptyState({ icon: Icon, title, text }) {
   );
 }
 
-function Workbench({ product, user, onSave, onSettle, saving }) {
+function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, saving }) {
   const [draft, setDraft] = useState(product);
   const [dirty, setDirty] = useState(false);
   const [visible, setVisible] = useState({});
@@ -3235,7 +3260,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
               <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
               <Input label="恢复邮箱账号" value={draft.email} copyable onOpenFull={openFullValue} onChange={(value) => updateField('email', value)} />
               <SecretInput readOnly={!canEditCredentials} label="恢复邮箱密码" value={draft.recoveryEmailPassword} visible={visible.recoveryEmailPassword} onToggle={() => setVisible({ ...visible, recoveryEmailPassword: !visible.recoveryEmailPassword })} onChange={(value) => updateField('recoveryEmailPassword', value)} onOpenFull={openFullValue} />
-              <PhoneInput product={draft} copyable onChange={(patch) => commitChange(patch)} />
+              <PhoneInput product={draft} copyable onChange={(patch) => commitChange(patch)} onOpenRenewal={() => onOpenPhoneRenewals?.(draft.id)} />
               {isAppleDeveloper && <Input label="接码链接" value={draft.smsLink} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('smsLink', value)} />}
               {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="谷歌验证器" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} actionLabel={authenticatorCode.code ? `${authenticatorCode.code} · ${authenticatorCode.seconds}s` : '6位码'} onAction={showAuthenticatorCode} actionDisabled={!draft.googleAuth} actionTitle="生成并复制当前6位验证码" />}
               {!isAppleDeveloper && authenticatorCode.message && <div className="field-note">{authenticatorCode.message}</div>}
@@ -3550,8 +3575,9 @@ function SecretInput({ label, value, visible, onToggle, onChange, disabled = fal
   );
 }
 
-function PhoneInput({ product, onChange, disabled = false, copyable = false }) {
+function PhoneInput({ product, onChange, disabled = false, copyable = false, onOpenRenewal }) {
   const text = formatPhoneNumber(product.phoneCode, product.phone);
+  const canOpenRenewal = Boolean(onOpenRenewal && product.phone && !String(product.id || '').startsWith('draft-'));
   return (
     <label className="input-label">
       <span>恢复手机号</span>
@@ -3560,6 +3586,21 @@ function PhoneInput({ product, onChange, disabled = false, copyable = false }) {
           <option>+86</option><option>+852</option><option>+1</option><option>+44</option>
         </select>
         <input disabled={disabled} value={product.phone} onChange={(event) => onChange({ phone: event.target.value })} />
+        {onOpenRenewal && (
+          <button
+            className="phone-renewal-icon-button"
+            type="button"
+            disabled={disabled || !canOpenRenewal}
+            title={canOpenRenewal ? '跳转到该号码续费页' : '保存并填写手机号后可跳转续费页'}
+            aria-label="跳转到该号码续费页"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (canOpenRenewal) onOpenRenewal();
+            }}
+          >
+            <RefreshCw size={15} />
+          </button>
+        )}
         {copyable && <CopyFieldButton value={text} disabled={disabled} />}
       </div>
     </label>
