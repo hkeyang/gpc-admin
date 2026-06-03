@@ -298,6 +298,7 @@ function createBlankProduct(productType = defaultBusinessType) {
     googleAuth: '',
     securityCode: '',
     phoneSmsCode: '',
+    verifierLinkUrl: '',
     smsLink: '',
     vpsIp: '',
     vpsRemoteUrl: '',
@@ -1019,7 +1020,7 @@ function readStoredPushTemplates() {
 
 function productPushValue(product, key) {
   if (key === 'phone') return formatPhoneNumber(product.phoneCode, product.phone);
-  if (key === 'authenticatorCodeUrl') return authenticatorCodeUrl;
+  if (key === 'authenticatorCodeUrl') return product.verifierLinkUrl || authenticatorCodeUrl;
   return product[key] ?? '';
 }
 
@@ -1306,6 +1307,7 @@ function App() {
       googleAuth: '',
       securityCode: '',
       phoneSmsCode: '',
+      verifierLinkUrl: '',
       smsLink: '',
       vpsIp: '',
       vpsRemoteUrl: '',
@@ -2912,12 +2914,13 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
   const [fullView, setFullView] = useState(null);
   const [authenticatorCode, setAuthenticatorCode] = useState({ code: '', seconds: 0, message: '' });
   const [smsFrameUrl, setSmsFrameUrl] = useState('');
-  const [verifierLinkState, setVerifierLinkState] = useState({ loading: false, revoking: false, url: '', token: '' });
+  const [verifierLinkState, setVerifierLinkState] = useState({ loading: false, revoking: false, url: product?.verifierLinkUrl || '', token: '' });
   const settlement = settlementAmounts(draft);
   const canEditCredentials = user?.role === 'super_admin';
   const isNewProduct = String(draft.id).startsWith('draft-');
   const business = businessTypeConfig(productBusinessType(draft));
   const isAppleDeveloper = business.id === 'appleDeveloper';
+  const showGoogleDeveloperAccessPanel = false;
   const googleDeveloperAccess = normalizeGoogleDeveloperAccess(draft);
 
   useEffect(() => {
@@ -2927,10 +2930,24 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
     setSettlementNotice('');
     setAuthenticatorCode({ code: '', seconds: 0, message: '' });
     setSmsFrameUrl('');
-    setVerifierLinkState({ loading: false, revoking: false, url: '', token: '' });
+    setVerifierLinkState({ loading: false, revoking: false, url: product?.verifierLinkUrl || '', token: '' });
     setCostDraft({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
     setShowCostForm(false);
   }, [product?.id]);
+
+  useEffect(() => {
+    if (isAppleDeveloper || isNewProduct || draft.verifierLinkUrl) return undefined;
+    let cancelled = false;
+    apiJson(`/api/verifier-links?productId=${encodeURIComponent(draft.id)}`)
+      .then((data) => {
+        if (cancelled || !data.url) return;
+        setVerifierLinkState({ loading: false, revoking: false, url: data.url, token: data.token || '' });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [draft.id, draft.verifierLinkUrl, isAppleDeveloper, isNewProduct]);
 
   useEffect(() => {
     if (!authenticatorCode.code) return undefined;
@@ -3138,6 +3155,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
         body: JSON.stringify({ productId: draft.id })
       });
       setVerifierLinkState({ loading: false, revoking: false, url: data.url || '', token: data.token || '' });
+      if (data.url) commitChange({ verifierLinkUrl: data.url });
       await navigator.clipboard?.writeText(data.url || '');
       setNotice('客户接码页链接已生成并复制，有效期约 1 年。');
     } catch (error) {
@@ -3160,6 +3178,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
         body: JSON.stringify({ productId: draft.id })
       });
       setVerifierLinkState({ loading: false, revoking: false, url: '', token: '' });
+      commitChange({ verifierLinkUrl: '' });
       setNotice(data.revoked ? `已作废 ${data.revoked} 个接码页链接。` : '当前产品没有可作废的接码页链接。');
     } catch (error) {
       setVerifierLinkState((state) => ({ ...state, revoking: false }));
@@ -3249,7 +3268,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
             </div>
           </Section>
 
-          {canEditCredentials && !isAppleDeveloper && (
+          {showGoogleDeveloperAccessPanel && canEditCredentials && !isAppleDeveloper && (
             <Section title="Google Developer Access" icon={ShieldCheck} subtitle="Control the English basic information page for the overseas buyer">
               <div className="google-access-box">
                 <label className="checkbox-chip">

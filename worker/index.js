@@ -217,6 +217,13 @@ export class AuthStore {
       return json({ record }, 201);
     }
 
+    if (url.pathname === '/verifier-links' && request.method === 'GET') {
+      const productId = cleanLine(url.searchParams.get('productId') || url.searchParams.get('id'));
+      if (!productId) return json({ message: '产品 ID 不能为空' }, 400);
+      const record = await this.findLatestVerifierLinkForProduct(productId);
+      return json({ record });
+    }
+
     const verifierLinkMatch = url.pathname.match(/^\/verifier-links\/([^/]+)$/);
     if (verifierLinkMatch && request.method === 'GET') {
       const code = normalizeVerifierCode(decodeURIComponent(verifierLinkMatch[1]));
@@ -410,6 +417,19 @@ export class AuthStore {
       revoked += 1;
     }
     return revoked;
+  }
+
+  async findLatestVerifierLinkForProduct(productId) {
+    if (!productId) return null;
+    const entries = await this.state.storage.list({ prefix: 'verifier_link:' });
+    const now = nowSeconds();
+    let latest = null;
+    for (const [, record] of entries) {
+      if (cleanLine(record.productId) !== productId || record.revokedAt) continue;
+      if (record.exp < now) continue;
+      if (!latest || Number(record.iat || 0) > Number(latest.iat || 0)) latest = record;
+    }
+    return latest;
   }
 
   async listGoogleDeveloperProducts(username = '') {
@@ -714,6 +734,10 @@ async function handleApi(request, env, url) {
     return createVerifierLink(request, env, sessionUser);
   }
 
+  if (url.pathname === '/api/verifier-links' && request.method === 'GET') {
+    return getVerifierLink(request, env, url);
+  }
+
   if (url.pathname === '/api/verifier-links' && request.method === 'DELETE') {
     return revokeVerifierLink(request, env);
   }
@@ -750,6 +774,28 @@ async function createVerifierLink(request, env, sessionUser) {
     url: verifierUrl.toString(),
     expiresAt: new Date(data.record.exp * 1000).toISOString(),
     expiresIn: VERIFIER_TOKEN_MAX_AGE
+  });
+}
+
+async function getVerifierLink(request, env, url) {
+  const productId = cleanLine(url.searchParams.get('productId') || url.searchParams.get('id'));
+  if (!productId) return json({ message: '产品 ID 不能为空' }, 400);
+
+  const response = await authStore(env).fetch(`https://auth.local/verifier-links?productId=${encodeURIComponent(productId)}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return json({ message: data.message || '接码链接读取失败，请重试' }, response.status);
+  if (!data.record?.token) return json({ ok: true, token: '', url: '' });
+
+  const baseUrl = normalizedVerifierBaseUrl(env.VERIFIER_BASE_URL || DEFAULT_VERIFIER_BASE_URL);
+  const verifierUrl = new URL(baseUrl);
+  verifierUrl.searchParams.set('token', data.record.token);
+
+  return json({
+    ok: true,
+    token: data.record.token,
+    url: verifierUrl.toString(),
+    expiresAt: new Date(data.record.exp * 1000).toISOString(),
+    expiresIn: Math.max(0, Number(data.record.exp || 0) - nowSeconds())
   });
 }
 
@@ -1147,6 +1193,7 @@ function sanitizeProduct(input, id) {
     googleAuth: cleanLine(input.googleAuth),
     securityCode: cleanLine(input.securityCode),
     phoneSmsCode: cleanLine(input.phoneSmsCode),
+    verifierLinkUrl: cleanLine(input.verifierLinkUrl),
     smsLink: cleanLine(input.smsLink),
     vpsIp: cleanLine(input.vpsIp),
     vpsRemoteUrl: cleanLine(input.vpsRemoteUrl),
@@ -1369,6 +1416,7 @@ function mergeDuplicateProduct(base, duplicate) {
     'googleAuth',
     'securityCode',
     'phoneSmsCode',
+    'verifierLinkUrl',
     'smsLink',
     'vpsIp',
     'vpsRemoteUrl',
