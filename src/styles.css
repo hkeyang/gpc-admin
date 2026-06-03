@@ -820,6 +820,116 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   z-index: 2;
   white-space: nowrap;
 }
+.hotmail-auth-panel {
+  grid-column: 2 / -1;
+  margin-top: -6px;
+  display: grid;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid #e5e8f0;
+  border-radius: 6px;
+  background: #fbfcff;
+}
+.hotmail-auth-panel.is-authorized {
+  border-color: #ccefdc;
+  background: #f4fff8;
+}
+.hotmail-auth-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #667187;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+.hotmail-auth-status svg {
+  flex: 0 0 auto;
+  color: #16ad70;
+}
+.hotmail-device-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+.hotmail-device-box a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--purple);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.hotmail-device-box small {
+  grid-column: 1 / -1;
+  color: #8a95aa;
+  font-size: 11px;
+  font-weight: 800;
+}
+.hotmail-device-code {
+  position: relative;
+  height: 28px;
+  border: 1px solid #d8d4ff;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: #4f43d9;
+  background: #f7f5ff;
+  font: 800 12px/1 JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.hotmail-device-code svg { margin: 0; }
+.hotmail-device-code em {
+  position: absolute;
+  right: 0;
+  bottom: -20px;
+  color: #16ad70;
+  background: #e8fbf1;
+  border-radius: 5px;
+  padding: 2px 6px;
+  font: 800 11px/1.2 Inter, "PingFang SC", system-ui, sans-serif;
+  white-space: nowrap;
+}
+.hotmail-auth-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.hotmail-auth-actions span {
+  min-width: 0;
+  flex: 1 1 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #536078;
+  font-size: 12px;
+  font-weight: 800;
+}
+.hotmail-auth-actions button {
+  height: 26px;
+  border-radius: 6px;
+  padding: 0 9px;
+  color: var(--purple);
+  background: #f3f1ff;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.hotmail-auth-actions button.danger {
+  color: #d33b55;
+  background: #fff2f5;
+}
+.hotmail-auth-actions button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
 
 .value-modal-backdrop {
   position: fixed;

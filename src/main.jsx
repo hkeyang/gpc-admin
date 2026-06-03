@@ -930,6 +930,27 @@ function statusClass(status) {
   return 'warning';
 }
 
+function normalizeAuthEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function hotmailAuthActionLabel(state) {
+  if (state.starting) return '启动中';
+  if (state.polling) return '授权中';
+  if (state.auth?.status === 'authorized' && state.auth?.configured) return '重授';
+  if (state.auth?.status === 'reauthorize_required') return '重授';
+  return '授权';
+}
+
+function hotmailAuthStatusText(state) {
+  if (state.request?.status === 'pending') return '请完成 Microsoft 设备码授权。';
+  if (state.auth?.status === 'authorized' && state.auth?.configured) return 'Hotmail 已授权，客户接码页可后台读取最新邮件。';
+  if (state.auth?.status === 'reauthorize_required') return state.auth.message || '授权已失效，请重新授权。';
+  if (state.message) return state.message;
+  if (state.auth?.message) return state.auth.message;
+  return '';
+}
+
 async function apiJson(url, options = {}) {
   const controller = new AbortController();
   const timeoutMs = options.timeoutMs || 15000;
@@ -2956,6 +2977,7 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
   const [authenticatorCode, setAuthenticatorCode] = useState({ code: '', seconds: 0, message: '' });
   const [smsFrameUrl, setSmsFrameUrl] = useState('');
   const [verifierLinkState, setVerifierLinkState] = useState({ loading: false, revoking: false, url: product?.verifierLinkUrl || '', token: '' });
+  const [hotmailAuthState, setHotmailAuthState] = useState({ loading: false, starting: false, polling: false, revoking: false, auth: null, request: null, message: '' });
   const settlement = settlementAmounts(draft);
   const canEditCredentials = user?.role === 'super_admin';
   const isNewProduct = String(draft.id).startsWith('draft-');
@@ -2972,9 +2994,96 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
     setAuthenticatorCode({ code: '', seconds: 0, message: '' });
     setSmsFrameUrl('');
     setVerifierLinkState({ loading: false, revoking: false, url: product?.verifierLinkUrl || '', token: '' });
+    setHotmailAuthState({ loading: false, starting: false, polling: false, revoking: false, auth: null, request: null, message: '' });
     setCostDraft({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
     setShowCostForm(false);
   }, [product?.id]);
+
+  useEffect(() => {
+    if (isAppleDeveloper) return undefined;
+    const email = normalizeAuthEmail(draft.email);
+    if (!email || !email.includes('@')) {
+      setHotmailAuthState((current) => ({
+        ...current,
+        loading: false,
+        auth: null,
+        message: email ? '邮箱格式不完整，暂不能授权。' : ''
+      }));
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      setHotmailAuthState((current) => ({ ...current, loading: true }));
+      const params = new URLSearchParams({ email });
+      if (!isNewProduct) params.set('productId', draft.id);
+      apiJson(`/api/hotmail-auth/status?${params.toString()}`)
+        .then((data) => {
+          if (cancelled) return;
+          setHotmailAuthState((current) => ({
+            ...current,
+            loading: false,
+            auth: data.auth || null,
+            message: current.starting || current.request ? current.message : (data.auth?.message || '')
+          }));
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setHotmailAuthState((current) => ({
+            ...current,
+            loading: false,
+            message: current.starting || current.request ? current.message : (error.message || '邮箱授权状态读取失败。')
+          }));
+        });
+    }, 350);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [draft.email, draft.id, isAppleDeveloper, isNewProduct]);
+
+  useEffect(() => {
+    const request = hotmailAuthState.request;
+    if (!request?.requestId || request.status !== 'pending') return undefined;
+    let cancelled = false;
+    const delay = Math.max(5, Number(request.interval || 5)) * 1000;
+    const timer = window.setTimeout(() => {
+      setHotmailAuthState((current) => ({ ...current, polling: true }));
+      apiJson(`/api/hotmail-auth/device/status?requestId=${encodeURIComponent(request.requestId)}`, { timeoutMs: 20000 })
+        .then((data) => {
+          if (cancelled) return;
+          if (data.status === 'authorized') {
+            setHotmailAuthState((current) => ({
+              ...current,
+              polling: false,
+              request: null,
+              auth: data.auth || current.auth,
+              message: '恢复邮箱已授权，客户接码页可读取邮件验证码。'
+            }));
+            return;
+          }
+          setHotmailAuthState((current) => ({
+            ...current,
+            polling: false,
+            request: { ...request, interval: data.interval || request.interval, status: 'pending' },
+            message: '等待 Microsoft 授权完成...'
+          }));
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setHotmailAuthState((current) => ({
+            ...current,
+            polling: false,
+            request: null,
+            message: error.message || 'Microsoft 授权状态读取失败。'
+          }));
+        });
+    }, delay);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [hotmailAuthState.request]);
 
   useEffect(() => {
     if (isAppleDeveloper || isNewProduct || draft.verifierLinkUrl) return undefined;
@@ -3230,6 +3339,64 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
     if (!verifierLinkState.url) return;
     window.open(verifierLinkState.url, '_blank', 'noopener,noreferrer');
   };
+  const startHotmailAuth = async () => {
+    const email = normalizeAuthEmail(draft.email);
+    if (!email || !email.includes('@')) {
+      setHotmailAuthState((current) => ({ ...current, message: '请先填写完整恢复邮箱账号。' }));
+      return;
+    }
+    setHotmailAuthState((current) => ({ ...current, starting: true, request: null, message: '正在启动 Microsoft 设备码授权...' }));
+    try {
+      const data = await apiJson('/api/hotmail-auth/device/start', {
+        method: 'POST',
+        body: JSON.stringify({
+          productId: isNewProduct ? '' : draft.id,
+          email
+        })
+      });
+      setHotmailAuthState((current) => ({
+        ...current,
+        starting: false,
+        request: { ...data, status: data.status || 'pending' },
+        message: '请打开 Microsoft 设备登录页并输入授权代码。'
+      }));
+    } catch (error) {
+      setHotmailAuthState((current) => ({
+        ...current,
+        starting: false,
+        message: error.message || 'Microsoft 设备码授权启动失败。'
+      }));
+    }
+  };
+  const revokeHotmailAuth = async () => {
+    const email = normalizeAuthEmail(draft.email);
+    if (!email) return;
+    const confirmed = window.confirm('确定取消这个恢复邮箱的后台读取授权吗？取消后客户接码页不能读取邮件验证码。');
+    if (!confirmed) return;
+    setHotmailAuthState((current) => ({ ...current, revoking: true, message: '正在取消恢复邮箱授权...' }));
+    try {
+      const data = await apiJson('/api/hotmail-auth', {
+        method: 'DELETE',
+        body: JSON.stringify({
+          productId: isNewProduct ? '' : draft.id,
+          email
+        })
+      });
+      setHotmailAuthState((current) => ({
+        ...current,
+        revoking: false,
+        auth: data.auth || null,
+        request: null,
+        message: '已取消恢复邮箱授权。'
+      }));
+    } catch (error) {
+      setHotmailAuthState((current) => ({
+        ...current,
+        revoking: false,
+        message: error.message || '恢复邮箱授权取消失败。'
+      }));
+    }
+  };
   const openVpsRemoteUrl = () => {
     const url = normalizedUrl(draft.vpsRemoteUrl);
     if (!url) {
@@ -3287,7 +3454,25 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
               </label>
               <Input label="账号" value={draft.account} copyable onOpenFull={openFullValue} onChange={(value) => updateField('account', value)} />
               <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
-              <Input label="恢复邮箱账号" value={draft.email} copyable onOpenFull={openFullValue} onChange={(value) => updateField('email', value)} />
+              <Input
+                label="恢复邮箱账号"
+                value={draft.email}
+                copyable
+                onOpenFull={openFullValue}
+                onChange={(value) => updateField('email', value)}
+                actionLabel={!isAppleDeveloper ? hotmailAuthActionLabel(hotmailAuthState) : ''}
+                onAction={startHotmailAuth}
+                actionDisabled={!canEditCredentials || !draft.email || hotmailAuthState.starting || hotmailAuthState.polling}
+                actionTitle="授权 Hotmail 后台读取恢复邮箱验证码"
+              />
+              {!isAppleDeveloper && (hotmailAuthStatusText(hotmailAuthState) || hotmailAuthState.request) && (
+                <HotmailAuthPanel
+                  state={hotmailAuthState}
+                  canEdit={canEditCredentials}
+                  onStart={startHotmailAuth}
+                  onRevoke={revokeHotmailAuth}
+                />
+              )}
               <SecretInput readOnly={!canEditCredentials} label="恢复邮箱密码" value={draft.recoveryEmailPassword} visible={visible.recoveryEmailPassword} onToggle={() => setVisible({ ...visible, recoveryEmailPassword: !visible.recoveryEmailPassword })} onChange={(value) => updateField('recoveryEmailPassword', value)} onOpenFull={openFullValue} />
               <PhoneInput product={draft} copyable onChange={(patch) => commitChange(patch)} onOpenRenewal={() => onOpenPhoneRenewals?.(draft.id)} />
               {isAppleDeveloper && <Input label="接码链接" value={draft.smsLink} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('smsLink', value)} />}
@@ -3668,6 +3853,57 @@ function CopyFieldButton({ value, disabled = false }) {
       <Copy size={15} />
       {copied && <em className="copy-feedback">已复制</em>}
     </button>
+  );
+}
+
+function HotmailAuthPanel({ state, canEdit, onStart, onRevoke }) {
+  const [copied, setCopied] = useState(false);
+  const request = state.request;
+  const auth = state.auth;
+  const isAuthorized = auth?.status === 'authorized' && auth?.configured;
+  const statusText = hotmailAuthStatusText(state);
+  const copyCode = async () => {
+    if (!request?.userCode) return;
+    try {
+      await navigator.clipboard?.writeText(request.userCode);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className={`hotmail-auth-panel ${isAuthorized ? 'is-authorized' : ''}`}>
+      <div className="hotmail-auth-status">
+        <ShieldCheck size={15} />
+        <span>{state.loading ? '正在读取邮箱授权状态...' : statusText}</span>
+      </div>
+      {request && (
+        <div className="hotmail-device-box">
+          <a href={request.verificationUri || 'https://microsoft.com/devicelogin'} target="_blank" rel="noreferrer">
+            {request.verificationUri || 'https://microsoft.com/devicelogin'}
+          </a>
+          <button type="button" className="hotmail-device-code" onClick={copyCode} title="复制 Microsoft 授权代码">
+            <span>{request.userCode || '------'}</span>
+            <Copy size={14} />
+            {copied && <em>已复制</em>}
+          </button>
+          <small>{state.polling ? '正在等待授权完成...' : '输入代码后，本页会自动变成已授权。'}</small>
+        </div>
+      )}
+      {isAuthorized && (
+        <div className="hotmail-auth-actions">
+          <span>{auth.microsoftUser?.userPrincipalName || auth.microsoftUser?.mail || auth.email}</span>
+          {canEdit && (
+            <>
+              <button type="button" onClick={onStart} disabled={state.starting || state.polling}>重新授权</button>
+              <button type="button" className="danger" onClick={onRevoke} disabled={state.revoking}>取消授权</button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

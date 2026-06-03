@@ -3,6 +3,8 @@ const SESSION_MAX_AGE = 60 * 60 * 12;
 const VERIFIER_TOKEN_MAX_AGE = 60 * 60 * 24 * 365;
 const VERIFIER_SHORT_CODE_LENGTH = 10;
 const DEFAULT_VERIFIER_BASE_URL = 'https://2fa.aisea.space/';
+const MICROSOFT_DEFAULT_TENANT = 'consumers';
+const MICROSOFT_GRAPH_SCOPE = 'offline_access User.Read Mail.Read';
 const DEFAULT_PRODUCTS = [];
 const GOOGLE_DEVELOPER_ROLE = 'google_developer';
 
@@ -246,6 +248,53 @@ export class AuthStore {
       return json({ ok: true, revoked });
     }
 
+    if (url.pathname === '/hotmail-auth/status' && request.method === 'GET') {
+      const productId = cleanLine(url.searchParams.get('productId') || url.searchParams.get('id'));
+      const email = normalizeEmailKey(url.searchParams.get('email') || await this.emailForProduct(productId));
+      if (!email) return json({ configured: false, message: '该产品没有配置 Hotmail 邮箱。' });
+      const record = await this.getHotmailAuth(email);
+      return json({ auth: publicHotmailAuth(record, email) });
+    }
+
+    if (url.pathname === '/hotmail-auth/device' && request.method === 'POST') {
+      const body = await readJson(request);
+      const productId = cleanLine(body.productId || body.id);
+      const email = normalizeEmailKey(body.email || await this.emailForProduct(productId));
+      if (!email) return json({ message: '请先填写恢复邮箱账号。' }, 400);
+      const result = await this.startHotmailDeviceAuth({
+        email,
+        productId,
+        startedBy: cleanLine(body.startedBy)
+      });
+      if (result.error) return json({ message: result.error }, result.status || 400);
+      return json(result.authRequest, 201);
+    }
+
+    if (url.pathname === '/hotmail-auth/device-status' && request.method === 'GET') {
+      const requestId = cleanLine(url.searchParams.get('requestId') || url.searchParams.get('id'));
+      if (!requestId) return json({ message: '授权请求 ID 不能为空' }, 400);
+      const result = await this.pollHotmailDeviceAuth(requestId);
+      if (result.error) return json({ message: result.error }, result.status || 400);
+      return json(result.status);
+    }
+
+    if (url.pathname === '/hotmail-auth' && request.method === 'DELETE') {
+      const body = await readJson(request);
+      const productId = cleanLine(body.productId || body.id);
+      const email = normalizeEmailKey(body.email || await this.emailForProduct(productId));
+      if (!email) return json({ message: '请先填写恢复邮箱账号。' }, 400);
+      await this.state.storage.delete(`hotmail_auth:${email}`);
+      return json({ ok: true, auth: publicHotmailAuth(null, email) });
+    }
+
+    if (url.pathname === '/hotmail-auth/mail-code' && request.method === 'GET') {
+      const email = normalizeEmailKey(url.searchParams.get('email'));
+      if (!email) return json({ message: '邮箱不能为空' }, 400);
+      const result = await this.readHotmailVerificationCode(email);
+      if (result.error) return json({ message: result.error, email }, result.status || 400);
+      return json(result.data);
+    }
+
     const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
     if (productMatch && request.method === 'GET') {
       const id = decodeURIComponent(productMatch[1]);
@@ -430,6 +479,179 @@ export class AuthStore {
       if (!latest || Number(record.iat || 0) > Number(latest.iat || 0)) latest = record;
     }
     return latest;
+  }
+
+  async emailForProduct(productId) {
+    if (!productId) return '';
+    const product = await this.state.storage.get(`product:${productId}`);
+    return product ? cleanLine(product.email) : '';
+  }
+
+  async getHotmailAuth(email) {
+    const key = normalizeEmailKey(email);
+    return key ? await this.state.storage.get(`hotmail_auth:${key}`) : null;
+  }
+
+  async startHotmailDeviceAuth({ email, productId = '', startedBy = '' }) {
+    const clientId = cleanLine(this.env.MICROSOFT_CLIENT_ID);
+    if (!clientId) {
+      return { status: 503, error: 'Microsoft Client ID 未配置，请先设置 MICROSOFT_CLIENT_ID。' };
+    }
+
+    const tenant = normalizeMicrosoftTenant(this.env.MICROSOFT_TENANT);
+    const response = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/devicecode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        scope: MICROSOFT_GRAPH_SCOPE
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.device_code) {
+      return { status: 502, error: data.error_description || data.error || 'Microsoft 设备码授权启动失败。' };
+    }
+
+    const now = Date.now();
+    const requestId = crypto.randomUUID();
+    const record = {
+      id: requestId,
+      email: normalizeEmailKey(email),
+      productId,
+      startedBy,
+      deviceCode: data.device_code,
+      userCode: data.user_code,
+      verificationUri: data.verification_uri,
+      message: data.message,
+      interval: Math.max(5, Number(data.interval || 5)),
+      status: 'pending',
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + Number(data.expires_in || 900) * 1000).toISOString()
+    };
+    await this.state.storage.put(`hotmail_device:${requestId}`, record);
+    return {
+      authRequest: publicHotmailDeviceRequest(record)
+    };
+  }
+
+  async pollHotmailDeviceAuth(requestId) {
+    const record = await this.state.storage.get(`hotmail_device:${requestId}`);
+    if (!record) return { status: 404, error: '授权请求不存在，请重新开始。' };
+    if (record.status === 'authorized') {
+      return { status: { status: 'authorized', auth: publicHotmailAuth(await this.getHotmailAuth(record.email), record.email) } };
+    }
+    if (Date.parse(record.expiresAt || '') <= Date.now()) {
+      await this.state.storage.delete(`hotmail_device:${requestId}`);
+      return { status: 410, error: '设备码已过期，请重新授权。' };
+    }
+
+    const clientId = cleanLine(this.env.MICROSOFT_CLIENT_ID);
+    if (!clientId) return { status: 503, error: 'Microsoft Client ID 未配置，请先设置 MICROSOFT_CLIENT_ID。' };
+
+    const tenant = normalizeMicrosoftTenant(this.env.MICROSOFT_TENANT);
+    const response = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+        client_id: clientId,
+        device_code: record.deviceCode
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const error = cleanLine(data.error);
+      if (error === 'authorization_pending') return { status: { status: 'pending', interval: record.interval } };
+      if (error === 'slow_down') {
+        record.interval = Math.min(20, Number(record.interval || 5) + 5);
+        await this.state.storage.put(`hotmail_device:${requestId}`, record);
+        return { status: { status: 'pending', interval: record.interval } };
+      }
+      if (error === 'authorization_declined') return { status: 403, error: '授权已被拒绝，请重新开始。' };
+      if (error === 'expired_token') {
+        await this.state.storage.delete(`hotmail_device:${requestId}`);
+        return { status: 410, error: '设备码已过期，请重新授权。' };
+      }
+      return { status: 502, error: data.error_description || error || 'Microsoft 授权状态读取失败。' };
+    }
+
+    if (!data.refresh_token) return { status: 502, error: 'Microsoft 未返回 refresh token，请确认应用允许公共客户端并请求 offline_access。' };
+
+    const saved = await this.saveHotmailAuth(record.email, data, {
+      productId: record.productId,
+      startedBy: record.startedBy
+    });
+    record.status = 'authorized';
+    record.authorizedAt = new Date().toISOString();
+    await this.state.storage.put(`hotmail_device:${requestId}`, record);
+    return { status: { status: 'authorized', auth: publicHotmailAuth(saved, record.email) } };
+  }
+
+  async saveHotmailAuth(email, tokenData, meta = {}) {
+    const key = normalizeEmailKey(email);
+    const existing = await this.getHotmailAuth(key);
+    const now = new Date().toISOString();
+    const accessToken = cleanLine(tokenData.access_token);
+    const microsoftUser = accessToken ? await fetchMicrosoftProfile(accessToken) : null;
+    const record = {
+      ...(existing || {}),
+      email: key,
+      productId: cleanLine(meta.productId || existing?.productId),
+      startedBy: cleanLine(meta.startedBy || existing?.startedBy),
+      refreshToken: await encryptSecret(cleanLine(tokenData.refresh_token), tokenCryptoSecret(this.env)),
+      scopes: cleanLine(tokenData.scope || existing?.scopes || MICROSOFT_GRAPH_SCOPE),
+      microsoftUser,
+      status: 'authorized',
+      error: '',
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      lastTokenRefreshAt: now
+    };
+    await this.state.storage.put(`hotmail_auth:${key}`, record);
+    return record;
+  }
+
+  async readHotmailVerificationCode(email) {
+    const key = normalizeEmailKey(email);
+    const record = await this.getHotmailAuth(key);
+    if (!record?.refreshToken) return { status: 404, error: '该恢复邮箱还没有授权 Hotmail 读取。' };
+
+    const refreshToken = await decryptSecret(record.refreshToken, tokenCryptoSecret(this.env));
+    if (!refreshToken) return { status: 500, error: '恢复邮箱授权凭据无法解密，请重新授权。' };
+
+    const tokenResult = await refreshMicrosoftToken(refreshToken, this.env);
+    if (tokenResult.error) {
+      record.status = 'reauthorize_required';
+      record.error = tokenResult.error;
+      record.updatedAt = new Date().toISOString();
+      await this.state.storage.put(`hotmail_auth:${key}`, record);
+      return { status: tokenResult.status || 502, error: tokenResult.error };
+    }
+
+    if (tokenResult.refreshToken) {
+      record.refreshToken = await encryptSecret(tokenResult.refreshToken, tokenCryptoSecret(this.env));
+      record.lastTokenRefreshAt = new Date().toISOString();
+    }
+
+    const mailResult = await fetchLatestMicrosoftMailCode(tokenResult.accessToken);
+    record.status = mailResult.error ? 'authorized' : 'authorized';
+    record.error = mailResult.error || '';
+    record.lastReadAt = new Date().toISOString();
+    record.updatedAt = record.lastReadAt;
+    await this.state.storage.put(`hotmail_auth:${key}`, record);
+
+    if (mailResult.error) return { status: mailResult.status || 502, error: mailResult.error };
+    return {
+      data: {
+        configured: true,
+        email: key,
+        code: mailResult.code,
+        subject: mailResult.subject,
+        receivedAt: mailResult.receivedAt,
+        message: mailResult.code ? '已读取最新恢复邮件验证码。' : '已读取最新邮件，但暂未找到验证码。'
+      }
+    };
   }
 
   async listGoogleDeveloperProducts(username = '') {
@@ -742,6 +964,25 @@ async function handleApi(request, env, url) {
     return revokeVerifierLink(request, env);
   }
 
+  if (url.pathname === '/api/hotmail-auth/status' && request.method === 'GET') {
+    return getHotmailAuthStatus(env, url);
+  }
+
+  if (url.pathname === '/api/hotmail-auth/device/start' && request.method === 'POST') {
+    if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以授权恢复邮箱读取' }, 403);
+    return startHotmailDeviceAuth(request, env, sessionUser);
+  }
+
+  if (url.pathname === '/api/hotmail-auth/device/status' && request.method === 'GET') {
+    if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以授权恢复邮箱读取' }, 403);
+    return pollHotmailDeviceAuth(env, url);
+  }
+
+  if (url.pathname === '/api/hotmail-auth' && request.method === 'DELETE') {
+    if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以取消恢复邮箱授权' }, 403);
+    return revokeHotmailAuth(request, env);
+  }
+
   return json({ message: 'Not found' }, 404);
 }
 
@@ -815,6 +1056,48 @@ async function revokeVerifierLink(request, env) {
   return json(data);
 }
 
+async function getHotmailAuthStatus(env, url) {
+  const productId = cleanLine(url.searchParams.get('productId') || url.searchParams.get('id'));
+  const email = cleanLine(url.searchParams.get('email'));
+  const params = new URLSearchParams();
+  if (productId) params.set('productId', productId);
+  if (email) params.set('email', email);
+  const response = await authStore(env).fetch(`https://auth.local/hotmail-auth/status?${params.toString()}`);
+  return response;
+}
+
+async function startHotmailDeviceAuth(request, env, sessionUser) {
+  const body = await readJson(request);
+  const response = await authStore(env).fetch(new Request('https://auth.local/hotmail-auth/device', {
+    method: 'POST',
+    body: JSON.stringify({
+      productId: cleanLine(body.productId || body.id),
+      email: cleanLine(body.email),
+      startedBy: sessionUser?.username || ''
+    }),
+    headers: { 'Content-Type': 'application/json' }
+  }));
+  return response;
+}
+
+async function pollHotmailDeviceAuth(env, url) {
+  const requestId = cleanLine(url.searchParams.get('requestId') || url.searchParams.get('id'));
+  return authStore(env).fetch(`https://auth.local/hotmail-auth/device-status?requestId=${encodeURIComponent(requestId)}`);
+}
+
+async function revokeHotmailAuth(request, env) {
+  const body = await readJson(request);
+  const response = await authStore(env).fetch(new Request('https://auth.local/hotmail-auth', {
+    method: 'DELETE',
+    body: JSON.stringify({
+      productId: cleanLine(body.productId || body.id),
+      email: cleanLine(body.email)
+    }),
+    headers: { 'Content-Type': 'application/json' }
+  }));
+  return response;
+}
+
 async function readVerifierSession(request, env, url) {
   const verification = await verifyVerifierToken(url.searchParams.get('token') || '', env);
   if (verification.error) return json(verification.error, verification.status, verifierCorsHeaders(request));
@@ -836,12 +1119,9 @@ async function readVerifierMailCode(request, env, url) {
   if (!product) return json({ message: '接码链接对应的产品不存在或已删除' }, 404, verifierCorsHeaders(request));
   if (!cleanLine(product.email)) return json({ message: '该产品没有配置 Hotmail 邮箱。' }, 400, verifierCorsHeaders(request));
 
-  return json({
-    configured: false,
-    email: cleanLine(product.email),
-    code: '',
-    message: 'Hotmail 后台读取尚未配置。请先接入 Microsoft Graph OAuth refresh token 后再读取最新邮件验证码。'
-  }, 501, verifierCorsHeaders(request));
+  const response = await authStore(env).fetch(`https://auth.local/hotmail-auth/mail-code?email=${encodeURIComponent(product.email)}`);
+  const data = await response.json().catch(() => ({}));
+  return json(data, response.ok ? 200 : response.status, verifierCorsHeaders(request));
 }
 
 async function readVerifierSmsCode(request, env, url) {
@@ -1026,6 +1306,171 @@ async function fetchSessionUser(env, username) {
 
 function cleanLine(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function normalizeEmailKey(value) {
+  return cleanLine(value).toLowerCase();
+}
+
+function normalizeMicrosoftTenant(value) {
+  const tenant = cleanLine(value) || MICROSOFT_DEFAULT_TENANT;
+  return /^[a-zA-Z0-9_.-]+$/.test(tenant) ? tenant : MICROSOFT_DEFAULT_TENANT;
+}
+
+function tokenCryptoSecret(env) {
+  return cleanLine(env.MICROSOFT_TOKEN_SECRET || env.SESSION_SECRET);
+}
+
+async function secretKey(secret) {
+  const bytes = new TextEncoder().encode(secret);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return crypto.subtle.importKey('raw', digest, 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+async function encryptSecret(value, secret) {
+  if (!value) return '';
+  if (!secret) throw new Error('缺少 token 加密密钥');
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await secretKey(secret);
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(value));
+  return `v1.${base64UrlEncodeBytes(iv)}.${base64UrlEncodeBytes(new Uint8Array(encrypted))}`;
+}
+
+async function decryptSecret(value, secret) {
+  const text = cleanLine(value);
+  if (!text || !secret) return '';
+  const parts = text.split('.');
+  if (parts.length !== 3 || parts[0] !== 'v1') return '';
+  try {
+    const iv = base64UrlDecodeBytes(parts[1]);
+    const encrypted = base64UrlDecodeBytes(parts[2]);
+    const key = await secretKey(secret);
+    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, encrypted);
+    return new TextDecoder().decode(decrypted);
+  } catch {
+    return '';
+  }
+}
+
+function publicHotmailDeviceRequest(record) {
+  return {
+    requestId: record.id,
+    email: record.email,
+    userCode: record.userCode,
+    verificationUri: record.verificationUri,
+    message: record.message,
+    interval: record.interval,
+    expiresAt: record.expiresAt,
+    status: record.status
+  };
+}
+
+function publicHotmailAuth(record, email = '') {
+  const key = normalizeEmailKey(email || record?.email);
+  if (!record) {
+    return {
+      configured: false,
+      email: key,
+      status: key ? 'not_authorized' : 'missing_email',
+      message: key ? '该邮箱尚未授权读取。' : '该产品没有配置 Hotmail 邮箱。'
+    };
+  }
+  return {
+    configured: Boolean(record.refreshToken && record.status === 'authorized'),
+    email: key,
+    status: record.status || 'authorized',
+    microsoftUser: record.microsoftUser || null,
+    scopes: record.scopes || '',
+    createdAt: record.createdAt || '',
+    updatedAt: record.updatedAt || '',
+    lastReadAt: record.lastReadAt || '',
+    lastTokenRefreshAt: record.lastTokenRefreshAt || '',
+    error: record.error || '',
+    message: record.status === 'reauthorize_required' ? '授权已失效，请重新授权。' : '已授权后台读取恢复邮箱。'
+  };
+}
+
+async function refreshMicrosoftToken(refreshToken, env) {
+  const clientId = cleanLine(env.MICROSOFT_CLIENT_ID);
+  if (!clientId) return { status: 503, error: 'Microsoft Client ID 未配置，请先设置 MICROSOFT_CLIENT_ID。' };
+
+  const tenant = normalizeMicrosoftTenant(env.MICROSOFT_TENANT);
+  const response = await fetch(`https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      scope: MICROSOFT_GRAPH_SCOPE
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) {
+    return { status: response.status || 502, error: data.error_description || data.error || 'Microsoft token 刷新失败，请重新授权。' };
+  }
+  return {
+    accessToken: data.access_token,
+    refreshToken: cleanLine(data.refresh_token)
+  };
+}
+
+async function fetchMicrosoftProfile(accessToken) {
+  try {
+    const response = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,displayName,userPrincipalName,mail', {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return {
+      id: cleanLine(data.id),
+      displayName: cleanLine(data.displayName),
+      userPrincipalName: cleanLine(data.userPrincipalName),
+      mail: cleanLine(data.mail)
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchLatestMicrosoftMailCode(accessToken) {
+  const messagesUrl = new URL('https://graph.microsoft.com/v1.0/me/messages');
+  messagesUrl.searchParams.set('$top', '10');
+  messagesUrl.searchParams.set('$orderby', 'receivedDateTime desc');
+  messagesUrl.searchParams.set('$select', 'subject,bodyPreview,body,receivedDateTime,from');
+  const response = await fetch(messagesUrl.toString(), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Prefer: 'outlook.body-content-type="text"'
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    return { status: response.status || 502, error: data.error?.message || 'Microsoft Graph 邮件读取失败。' };
+  }
+
+  const messages = Array.isArray(data.value) ? data.value : [];
+  for (const message of messages) {
+    const text = [
+      message.subject,
+      message.bodyPreview,
+      message.body?.content
+    ].filter(Boolean).join(' ');
+    const code = extractVerificationCode(text);
+    if (code) {
+      return {
+        code,
+        subject: cleanLine(message.subject),
+        receivedAt: cleanLine(message.receivedDateTime)
+      };
+    }
+  }
+  const latest = messages[0] || {};
+  return {
+    code: '',
+    subject: cleanLine(latest.subject),
+    receivedAt: cleanLine(latest.receivedDateTime)
+  };
 }
 
 function extractVerificationCode(value) {
@@ -1713,8 +2158,11 @@ function base64UrlEncodeBytes(bytes) {
 }
 
 function base64UrlDecode(value) {
+  return new TextDecoder().decode(base64UrlDecodeBytes(value));
+}
+
+function base64UrlDecodeBytes(value) {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
   const binary = atob(padded);
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
