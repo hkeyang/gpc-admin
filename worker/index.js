@@ -1,5 +1,7 @@
 const SESSION_COOKIE = 'gpc_session';
 const SESSION_MAX_AGE = 60 * 60 * 12;
+const VERIFIER_TOKEN_MAX_AGE = 60 * 60 * 2;
+const DEFAULT_VERIFIER_BASE_URL = 'https://2fa.aisea.space/';
 const DEFAULT_PRODUCTS = [];
 const GOOGLE_DEVELOPER_ROLE = 'google_developer';
 
@@ -205,6 +207,13 @@ export class AuthStore {
     }
 
     const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
+    if (productMatch && request.method === 'GET') {
+      const id = decodeURIComponent(productMatch[1]);
+      const product = await this.state.storage.get(`product:${id}`);
+      if (!product) return json({ message: '产品不存在' }, 404);
+      return json({ product });
+    }
+
     if (productMatch && request.method === 'PUT') {
       const id = decodeURIComponent(productMatch[1]);
       const existing = await this.state.storage.get(`product:${id}`);
@@ -424,12 +433,24 @@ export default {
 };
 
 async function handleApi(request, env, url) {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: verifierCorsHeaders(request) });
+  }
+
   if (url.pathname === '/api/exchange-rate' && request.method === 'GET') {
     return fetchUsdCnyRate();
   }
 
   if (!env.AUTH_STORE || !env.SESSION_SECRET) {
     return json({ message: '认证后端未配置，请检查 AUTH_STORE 和 SESSION_SECRET' }, 503);
+  }
+
+  if (url.pathname === '/api/verifier-session' && request.method === 'GET') {
+    return readVerifierSession(request, env, url);
+  }
+
+  if (url.pathname === '/api/verifier-mail-code' && request.method === 'GET') {
+    return readVerifierMailCode(request, env, url);
   }
 
   if (url.pathname === '/api/auth/me' && request.method === 'GET') {
@@ -612,7 +633,135 @@ async function handleApi(request, env, url) {
     return pushTelegramMessage(request, env);
   }
 
+  if (url.pathname === '/api/verifier-links' && request.method === 'POST') {
+    return createVerifierLink(request, env);
+  }
+
   return json({ message: 'Not found' }, 404);
+}
+
+async function createVerifierLink(request, env) {
+  const body = await readJson(request);
+  const productId = cleanLine(body.productId || body.id);
+  if (!productId) return json({ message: '产品 ID 不能为空' }, 400);
+
+  const product = await fetchProductById(env, productId);
+  if (!product) return json({ message: '产品不存在或已删除' }, 404);
+
+  const token = await signSession({
+    typ: 'verifier',
+    productId: product.id,
+    iat: nowSeconds(),
+    exp: nowSeconds() + VERIFIER_TOKEN_MAX_AGE
+  }, env.SESSION_SECRET);
+  const baseUrl = normalizedVerifierBaseUrl(env.VERIFIER_BASE_URL || DEFAULT_VERIFIER_BASE_URL);
+  const verifierUrl = new URL(baseUrl);
+  verifierUrl.searchParams.set('token', token);
+
+  return json({
+    ok: true,
+    token,
+    url: verifierUrl.toString(),
+    expiresIn: VERIFIER_TOKEN_MAX_AGE
+  });
+}
+
+async function readVerifierSession(request, env, url) {
+  const verification = await verifyVerifierToken(url.searchParams.get('token') || '', env);
+  if (verification.error) return json(verification.error, verification.status, verifierCorsHeaders(request));
+
+  const product = await fetchProductById(env, verification.payload.productId);
+  if (!product) return json({ message: '接码链接对应的产品不存在或已删除' }, 404, verifierCorsHeaders(request));
+
+  return json({
+    product: publicVerifierProduct(product),
+    expiresAt: new Date(verification.payload.exp * 1000).toISOString()
+  }, 200, verifierCorsHeaders(request));
+}
+
+async function readVerifierMailCode(request, env, url) {
+  const verification = await verifyVerifierToken(url.searchParams.get('token') || '', env);
+  if (verification.error) return json(verification.error, verification.status, verifierCorsHeaders(request));
+
+  const product = await fetchProductById(env, verification.payload.productId);
+  if (!product) return json({ message: '接码链接对应的产品不存在或已删除' }, 404, verifierCorsHeaders(request));
+  if (!cleanLine(product.email)) return json({ message: '该产品没有配置 Hotmail 邮箱。' }, 400, verifierCorsHeaders(request));
+
+  return json({
+    configured: false,
+    email: cleanLine(product.email),
+    code: '',
+    message: 'Hotmail 后台读取尚未配置。请先接入 Microsoft Graph OAuth refresh token 后再读取最新邮件验证码。'
+  }, 501, verifierCorsHeaders(request));
+}
+
+async function verifyVerifierToken(token, env) {
+  if (!token) return { status: 400, error: { message: '缺少接码 token' } };
+  const payload = await verifySession(token, env.SESSION_SECRET);
+  if (!payload || payload.typ !== 'verifier' || !payload.productId) {
+    return { status: 401, error: { message: '接码链接无效，请重新生成' } };
+  }
+  if (payload.exp < nowSeconds()) {
+    return { status: 401, error: { message: '接码链接已过期，请重新生成' } };
+  }
+  return { payload };
+}
+
+async function fetchProductById(env, productId) {
+  const response = await authStore(env).fetch(`https://auth.local/products/${encodeURIComponent(productId)}`);
+  if (!response.ok) return null;
+  const data = await response.json().catch(() => ({}));
+  return data.product || null;
+}
+
+function publicVerifierProduct(product) {
+  const smsUrl = normalizeHttpUrl(product.phoneSmsCode || product.smsLink);
+  return {
+    id: product.id,
+    label: cleanLine(product.account || product.email || `#${product.id}`).slice(0, 120),
+    googleAuth: cleanLine(product.googleAuth),
+    phone: formatPhoneNumber(product.phoneCode, product.phone),
+    smsUrl,
+    smsRaw: cleanLine(product.phoneSmsCode || product.smsLink),
+    hotmailEmail: cleanLine(product.email),
+    capabilities: {
+      totp: Boolean(cleanLine(product.googleAuth)),
+      sms: Boolean(smsUrl || cleanLine(product.phoneSmsCode || product.smsLink)),
+      hotmail: Boolean(cleanLine(product.email))
+    }
+  };
+}
+
+function normalizedVerifierBaseUrl(value) {
+  const text = cleanLine(value) || DEFAULT_VERIFIER_BASE_URL;
+  const withProtocol = /^https?:\/\//i.test(text) ? text : `https://${text}`;
+  const url = new URL(withProtocol);
+  if (!url.pathname.endsWith('/')) url.pathname += '/';
+  return url.toString();
+}
+
+function normalizeHttpUrl(value) {
+  const text = cleanLine(value);
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^[\w.-]+\.[a-z]{2,}(?:[/?#].*)?$/i.test(text)) return `https://${text}`;
+  return '';
+}
+
+function verifierCorsHeaders(request) {
+  const origin = request.headers.get('Origin') || '';
+  const allowed = [
+    'https://2fa.aisea.space',
+    'http://localhost:8787',
+    'http://127.0.0.1:8787'
+  ];
+  const headers = {
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400'
+  };
+  if (allowed.includes(origin)) headers['Access-Control-Allow-Origin'] = origin;
+  return headers;
 }
 
 async function pushTelegramMessage(request, env) {
@@ -670,6 +819,24 @@ async function fetchSessionUser(env, username) {
 
 function cleanLine(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function cleanDate(value) {
+  const match = cleanLine(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : '';
+}
+
+function addDays(value, days) {
+  const dateText = cleanDate(value);
+  if (!dateText) return '';
+  const [year, month, day] = dateText.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + Number(days || 0));
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')
+  ].join('-');
 }
 
 function formatPhoneNumber(phoneCode, phone) {
@@ -768,12 +935,18 @@ function normalizeUserRole(value) {
   return 'partner_admin';
 }
 
+function normalizeAvailabilityStatus(value) {
+  if (value === 'preparing' || value === 'paused') return value;
+  return 'available';
+}
+
 function sanitizeProduct(input, id) {
   const now = new Date();
   const updatedAt = now.toLocaleTimeString('zh-CN', { hour12: false });
   return {
     id: normalizeProductId(id),
     productType: normalizeProductType(input.productType),
+    availabilityStatus: normalizeAvailabilityStatus(input.availabilityStatus),
     createdAt: cleanLine(input.createdAt) || now.toISOString().slice(0, 10),
     account: cleanLine(input.account),
     email: cleanLine(input.email),
@@ -813,8 +986,43 @@ function sanitizeProduct(input, id) {
     accountCountry: cleanLine(input.accountCountry),
     accountInfoRaw: String(input.accountInfoRaw || '').slice(0, 3000),
     accountInfoFormatted: String(input.accountInfoFormatted || '').slice(0, 3000),
+    phoneRenewal: sanitizePhoneRenewal(input.phoneRenewal, input),
     googleDeveloperAccess: sanitizeGoogleDeveloperAccess(input.googleDeveloperAccess, input),
     updatedAt
+  };
+}
+
+function sanitizePhoneRenewal(input = {}, product = {}) {
+  const purchasedAt = cleanDate(input.purchasedAt) || cleanDate(product.createdAt) || new Date().toISOString().slice(0, 10);
+  const maxLifetimeMonths = positiveInteger(input.maxLifetimeMonths, 12);
+  const defaultRenewDays = positiveInteger(input.defaultRenewDays, 30);
+  const reminderDays = positiveInteger(input.reminderDays, 5);
+  const currentExpiresAt = cleanDate(input.currentExpiresAt) || addDays(purchasedAt, defaultRenewDays);
+  return {
+    mode: input.mode === 'disabled' ? 'disabled' : 'monthly',
+    purchasedAt,
+    currentExpiresAt,
+    maxLifetimeMonths,
+    reminderDays,
+    defaultRenewDays,
+    lastRenewedAt: cleanDate(input.lastRenewedAt),
+    lastRenewDays: positiveInteger(input.lastRenewDays, 0),
+    lastRenewalNote: String(input.lastRenewalNote || '').slice(0, 300),
+    history: Array.isArray(input.history) ? input.history.map(sanitizePhoneRenewalHistory).filter(Boolean).slice(0, 20) : []
+  };
+}
+
+function sanitizePhoneRenewalHistory(item = {}) {
+  const renewedAt = cleanDate(item.renewedAt);
+  const days = positiveInteger(item.days, 0);
+  if (!renewedAt || !days) return null;
+  return {
+    id: cleanLine(item.id) || crypto.randomUUID(),
+    renewedAt,
+    days,
+    from: cleanDate(item.from),
+    to: cleanDate(item.to),
+    note: String(item.note || '').slice(0, 300)
   };
 }
 
@@ -967,6 +1175,7 @@ function mergeDuplicateProduct(base, duplicate) {
     'phone',
     'password',
     'productType',
+    'availabilityStatus',
     'googleAuth',
     'securityCode',
     'phoneSmsCode',
@@ -1007,6 +1216,9 @@ function mergeDuplicateProduct(base, duplicate) {
   }
   if (duplicate.googleDeveloperAccess?.enabled) {
     merged.googleDeveloperAccess = duplicate.googleDeveloperAccess;
+  }
+  if (duplicate.phoneRenewal?.currentExpiresAt) {
+    merged.phoneRenewal = duplicate.phoneRenewal;
   }
   if (numberOrZero(duplicate.salePrice) > 0) merged.salePrice = numberOrZero(duplicate.salePrice);
 
@@ -1054,6 +1266,11 @@ function normalizeProductType(value) {
 function numberOrZero(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
+}
+
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }
 
 function nullableNumber(value) {

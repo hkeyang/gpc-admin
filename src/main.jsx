@@ -18,6 +18,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  ExternalLink,
   FileText,
   Bell,
   Home,
@@ -25,6 +26,7 @@ import {
   LayoutDashboard,
   LineChart,
   Lock,
+  MessageSquareText,
   Plus,
   Power,
   RefreshCw,
@@ -79,6 +81,16 @@ const businessTypes = [
   }
 ];
 const defaultBusinessType = businessTypes[0].id;
+const availabilityStatuses = {
+  preparing: 'preparing',
+  available: 'available',
+  paused: 'paused'
+};
+const availabilityStatusOptions = [
+  { value: availabilityStatuses.preparing, label: '准备中' },
+  { value: availabilityStatuses.available, label: '可出售' },
+  { value: availabilityStatuses.paused, label: '暂停出售' }
+];
 const costOwners = {
   hongKong: 'hongKong',
   wuhan: 'wuhan'
@@ -107,6 +119,22 @@ function businessTypeConfig(productType) {
 
 function productBusinessType(product) {
   return businessTypeConfig(product?.productType).id;
+}
+
+function productAvailabilityStatus(product) {
+  return Object.values(availabilityStatuses).includes(product?.availabilityStatus)
+    ? product.availabilityStatus
+    : availabilityStatuses.available;
+}
+
+function availabilityStatusLabel(product) {
+  if (product?.isSold) return '已售';
+  const status = productAvailabilityStatus(product);
+  return availabilityStatusOptions.find((item) => item.value === status)?.label || '可出售';
+}
+
+function isAvailableForSale(product) {
+  return !product?.isSold && productAvailabilityStatus(product) === availabilityStatuses.available;
 }
 
 function businessTypeFromPage(page) {
@@ -151,6 +179,9 @@ const defaultPushTemplates = [
     active: true
   }
 ];
+const phoneRenewalMaxMonths = 12;
+const phoneRenewalReminderDays = 5;
+const phoneRenewalDefaultDays = 30;
 
 function localDateInput(date = new Date()) {
   const year = date.getFullYear();
@@ -173,6 +204,50 @@ function toDateTimeInputValue(value) {
 
 function fromDateTimeInputValue(value) {
   return value ? value.replace('T', ' ') : '';
+}
+
+function dateInputValue(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : '';
+}
+
+function dateFromInput(value) {
+  const text = dateInputValue(value);
+  if (!text) return null;
+  const [year, month, day] = text.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  if (Number.isNaN(date.getTime())) return null;
+  return date;
+}
+
+function dateAddDays(value, days) {
+  const date = dateFromInput(value);
+  if (!date) return '';
+  date.setDate(date.getDate() + Number(days || 0));
+  return localDateInput(date);
+}
+
+function dateAddMonths(value, months) {
+  const date = dateFromInput(value);
+  if (!date) return '';
+  const originalDay = date.getDate();
+  date.setMonth(date.getMonth() + Number(months || 0));
+  if (date.getDate() < originalDay) date.setDate(0);
+  return localDateInput(date);
+}
+
+function dateDiffDays(left, right = localDateInput()) {
+  const leftDate = dateFromInput(left);
+  const rightDate = dateFromInput(right);
+  if (!leftDate || !rightDate) return null;
+  leftDate.setHours(0, 0, 0, 0);
+  rightDate.setHours(0, 0, 0, 0);
+  return Math.round((leftDate.getTime() - rightDate.getTime()) / 86400000);
+}
+
+function minDateInput(...values) {
+  return values.filter(Boolean).sort()[0] || '';
 }
 
 function openNativePicker(input) {
@@ -208,10 +283,12 @@ function createBlankCosts(productType = defaultBusinessType) {
 }
 
 function createBlankProduct(productType = defaultBusinessType) {
+  const createdAt = localDateInput();
   return {
     id: '',
     productType: businessTypeConfig(productType).id,
-    createdAt: localDateInput(),
+    availabilityStatus: availabilityStatuses.preparing,
+    createdAt,
     account: '',
     email: '',
     recoveryEmailPassword: '',
@@ -248,9 +325,53 @@ function createBlankProduct(productType = defaultBusinessType) {
     accountCountry: '',
     accountInfoRaw: '',
     accountInfoFormatted: '',
+    phoneRenewal: createBlankPhoneRenewal({ createdAt }),
     googleDeveloperAccess: createBlankGoogleDeveloperAccess(),
     updatedAt: ''
   };
+}
+
+function createBlankPhoneRenewal(product = {}) {
+  const purchasedAt = productDateValue(product) || localDateInput();
+  return {
+    mode: 'monthly',
+    purchasedAt,
+    currentExpiresAt: dateAddDays(purchasedAt, phoneRenewalDefaultDays),
+    maxLifetimeMonths: phoneRenewalMaxMonths,
+    reminderDays: phoneRenewalReminderDays,
+    defaultRenewDays: phoneRenewalDefaultDays,
+    lastRenewedAt: '',
+    lastRenewDays: 0,
+    lastRenewalNote: '',
+    history: []
+  };
+}
+
+function normalizePhoneRenewal(product = {}) {
+  const stored = product.phoneRenewal || {};
+  const purchasedAt = dateInputValue(stored.purchasedAt) || productDateValue(product) || localDateInput();
+  const maxLifetimeMonths = positiveInteger(stored.maxLifetimeMonths, phoneRenewalMaxMonths);
+  const currentExpiresAt = dateInputValue(stored.currentExpiresAt) || dateAddDays(purchasedAt, phoneRenewalDefaultDays);
+  const mode = ['monthly', 'disabled'].includes(stored.mode) ? stored.mode : 'monthly';
+  return {
+    ...createBlankPhoneRenewal({ createdAt: purchasedAt }),
+    ...stored,
+    mode,
+    purchasedAt,
+    currentExpiresAt,
+    maxLifetimeMonths,
+    reminderDays: positiveInteger(stored.reminderDays, phoneRenewalReminderDays),
+    defaultRenewDays: positiveInteger(stored.defaultRenewDays, phoneRenewalDefaultDays),
+    lastRenewedAt: dateInputValue(stored.lastRenewedAt) || '',
+    lastRenewDays: positiveInteger(stored.lastRenewDays, 0),
+    lastRenewalNote: String(stored.lastRenewalNote || ''),
+    history: Array.isArray(stored.history) ? stored.history : []
+  };
+}
+
+function positiveInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? Math.round(number) : fallback;
 }
 
 function createBlankGoogleDeveloperInfo(product = {}) {
@@ -510,6 +631,7 @@ function settlementAmounts(product) {
 }
 
 function productStatus(product) {
+  if (!product.isSold && productAvailabilityStatus(product) !== availabilityStatuses.available) return availabilityStatusLabel(product);
   if (!product.costs.length || sumCosts(product) === 0) return '待补成本';
   if (!product.isSold) return '待售';
   if (!product.isPaid) return '待回款';
@@ -683,6 +805,105 @@ function accountCost(product) {
   return Number(matched?.amount || 0);
 }
 
+function phoneRenewalInfo(product, today = localDateInput()) {
+  const renewal = normalizePhoneRenewal(product);
+  const phone = formatPhoneNumber(product.phoneCode, product.phone);
+  const maxExpiresAt = dateAddMonths(renewal.purchasedAt, renewal.maxLifetimeMonths);
+  const currentExpiresAt = minDateInput(renewal.currentExpiresAt, maxExpiresAt) || renewal.currentExpiresAt;
+  const phoneDaysLeft = dateDiffDays(currentExpiresAt, today);
+  const lifetimeDaysLeft = dateDiffDays(maxExpiresAt, today);
+  const isDisabled = renewal.mode === 'disabled';
+  const maxReached = lifetimeDaysLeft !== null && lifetimeDaysLeft <= 0;
+  const expired = phoneDaysLeft !== null && phoneDaysLeft < 0;
+  const dueSoon = phoneDaysLeft !== null && phoneDaysLeft >= 0 && phoneDaysLeft <= renewal.reminderDays;
+  const nearMax = lifetimeDaysLeft !== null && lifetimeDaysLeft > 0 && lifetimeDaysLeft <= 30;
+  let status = 'normal';
+  let label = '正常';
+  if (!phone) {
+    status = 'missing_phone';
+    label = '无手机号';
+  } else if (isDisabled) {
+    status = 'disabled';
+    label = '已停用';
+  } else if (maxReached || currentExpiresAt >= maxExpiresAt && expired) {
+    status = 'max_reached';
+    label = '不再续费';
+  } else if (currentExpiresAt >= maxExpiresAt) {
+    status = 'near_max';
+    label = '临近上限';
+  } else if (expired) {
+    status = 'expired';
+    label = '已过期';
+  } else if (dueSoon) {
+    status = 'due_soon';
+    label = '待续费';
+  } else if (nearMax) {
+    status = 'near_max';
+    label = '临近上限';
+  }
+  return {
+    product,
+    renewal,
+    phone,
+    maxExpiresAt,
+    currentExpiresAt,
+    phoneDaysLeft,
+    lifetimeDaysLeft,
+    status,
+    label,
+    canRenew: Boolean(phone && !isDisabled && !maxReached && currentExpiresAt < maxExpiresAt),
+    shouldRenew: Boolean(phone && !isDisabled && !maxReached && currentExpiresAt < maxExpiresAt && (expired || dueSoon))
+  };
+}
+
+function buildPhoneRenewalPatch(product, patch = {}) {
+  return {
+    phoneRenewal: {
+      ...normalizePhoneRenewal(product),
+      ...patch
+    }
+  };
+}
+
+function renewedPhonePatch(product, renewDays, note = '') {
+  const info = phoneRenewalInfo(product);
+  const days = positiveInteger(renewDays, phoneRenewalDefaultDays);
+  const baseExpiresAt = info.currentExpiresAt && info.currentExpiresAt > localDateInput() ? info.currentExpiresAt : localDateInput();
+  const currentExpiresAt = minDateInput(dateAddDays(baseExpiresAt, days), info.maxExpiresAt);
+  const renewedAt = localDateInput();
+  const historyItem = {
+    id: `${Date.now()}-${product.id}`,
+    renewedAt,
+    days,
+    from: info.currentExpiresAt,
+    to: currentExpiresAt,
+    note: String(note || '').slice(0, 300)
+  };
+  return buildPhoneRenewalPatch(product, {
+    currentExpiresAt,
+    defaultRenewDays: days,
+    lastRenewedAt: renewedAt,
+    lastRenewDays: days,
+    lastRenewalNote: note,
+    history: [historyItem, ...info.renewal.history].slice(0, 20)
+  });
+}
+
+function buildPhoneRenewalTelegramMessage(items, renewDays) {
+  const days = positiveInteger(renewDays, phoneRenewalDefaultDays);
+  const lines = items.map((item) => {
+    const account = item.product.account || item.product.email || `#${item.product.id}`;
+    return `${item.phone}　${days}天　${account}`;
+  });
+  return [
+    `你好，麻烦帮我续费以下手机号，每个续费 ${days} 天：`,
+    '',
+    ...lines,
+    '',
+    '请确认金额，我稍后付款。'
+  ].join('\n');
+}
+
 function downloadCsv(filename, rows) {
   const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? '').replaceAll('"', '""')}"`).join(',')).join('\n');
   const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' });
@@ -696,8 +917,11 @@ function downloadCsv(filename, rows) {
 
 function statusClass(status) {
   if (['已售', '已回款', '已结算'].includes(status)) return 'success';
-  if (['待回款', '未回款', '未结算'].includes(status)) return 'danger';
-  if (['待售', '待补成本'].includes(status)) return 'primary';
+  if (['待回款', '未回款', '未结算', '已过期', '不再续费'].includes(status)) return 'danger';
+  if (['待售', '待补成本', '可出售'].includes(status)) return 'primary';
+  if (['正常'].includes(status)) return 'success';
+  if (['待续费', '临近上限', '准备中'].includes(status)) return 'warning';
+  if (['暂停出售'].includes(status)) return 'muted';
   return 'warning';
 }
 
@@ -878,6 +1102,14 @@ function buildProductPushMessage(product, template = defaultPushTemplates[0]) {
 
 function cleanMessageValue(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function normalizedUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^https?:\/\//i.test(text)) return text;
+  if (/^[\w.-]+\.[a-z]{2,}(?:[/?#].*)?$/i.test(text)) return `https://${text}`;
+  return '';
 }
 
 function App() {
@@ -1063,6 +1295,7 @@ function App() {
     const nextProduct = {
       id: nextId,
       productType: normalizedType,
+      availabilityStatus: availabilityStatuses.preparing,
       createdAt: localDateInput(now),
       account: `new_product_${nextId}`,
       email: '',
@@ -1100,6 +1333,7 @@ function App() {
       accountCountry: '',
       accountInfoRaw: '',
       accountInfoFormatted: '',
+      phoneRenewal: createBlankPhoneRenewal({ createdAt: now.toISOString().slice(0, 10) }),
       googleDeveloperAccess: createBlankGoogleDeveloperAccess(),
       updatedAt: now.toLocaleTimeString('zh-CN', { hour12: false })
     };
@@ -1351,6 +1585,7 @@ function App() {
               exchangeRate={exchangeRate}
               pushTemplate={listPushTemplate(productType)}
               onAddProduct={() => addProduct(productType)}
+              onOpenPhoneRenewals={() => setPage('phone-renewals')}
               onOpenWorkbench={(id) => {
                 setActiveId(id);
                 setPage('workbench');
@@ -1359,6 +1594,7 @@ function App() {
           );
         })()}
         {!isGoogleDeveloperUser && page === 'account-details' && <AccountDetailsPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
+        {!isGoogleDeveloperUser && page === 'phone-renewals' && <PhoneRenewalPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
         {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'purchase-expenses' && (
           <PurchaseExpensesPage
@@ -1500,6 +1736,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount, products = [], ac
     { id: 'dashboard', label: '首页', icon: Home },
     ...businessTypes.map((item) => ({ id: item.navId, label: item.label, icon: ClipboardList })),
     { id: 'account-details', label: '账号详情', icon: UserRound },
+    { id: 'phone-renewals', label: '手机号续费', icon: MessageSquareText },
     { id: 'purchase-expenses', label: '代采购费用', icon: ReceiptText },
     { id: 'push-settings', label: '推送设置', icon: Send },
     { id: 'settings', label: '系统设置', icon: Settings }
@@ -1588,12 +1825,15 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
   const totalProfit = products.filter((item) => item.isSold).reduce((sum, item) => sum + productProfit(item), 0);
   const pendingPayment = products.filter((item) => item.isSold && !item.isPaid).reduce((sum, item) => sum + Number(item.salePrice || 0), 0);
   const missingCost = products.filter((item) => !item.costs.length || sumCosts(item) === 0).length;
+  const availableProducts = products.filter(isAvailableForSale);
+  const preparingProducts = products.filter((item) => !item.isSold && productAvailabilityStatus(item) === availabilityStatuses.preparing);
   const pendingSettlement = products
     .filter((item) => shouldShowPendingSettlement(item))
     .reduce((sum, item) => sum + settlementAmounts(item).hongKongReceivable, 0);
 
   const pie = [
-    { name: '待售', value: products.filter((item) => !item.isSold).length, color: '#3f74f6' },
+    { name: '可出售', value: availableProducts.length, color: '#3f74f6' },
+    { name: '准备中', value: preparingProducts.length, color: '#f2a23a' },
     { name: '已售', value: products.filter((item) => item.isSold).length, color: '#26c281' },
     { name: '待补成本', value: missingCost, color: '#8290a8' }
   ];
@@ -1638,7 +1878,7 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
         )}
       </div>
       <div className="kpi-grid six">
-        <Kpi icon={WalletCards} label="累计产品" value={`${total} 件`} sub="实时产品库" tone="purple" />
+        <Kpi icon={WalletCards} label="累计产品" value={`${total} 件`} sub={`可出售 ${availableProducts.length} 件`} tone="purple" />
         <Kpi icon={ShoppingCart} label="累计售出" value={`${sold} 件`} sub={`回款 ${paid} 件`} tone="blue" />
         <Kpi icon={Coins} label="累计利润" value={money(totalProfit)} sub={`销售额 ${money(totalSales)}`} tone="orange" />
         <Kpi icon={TrendingUp} label="本月利润" value={money(monthlyBars.at(-1)?.profit || 0)} sub="当前产品数据" tone="green" />
@@ -1828,8 +2068,9 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, title }) {
+function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, onOpenPhoneRenewals, title }) {
   const [keyword, setKeyword] = useState('');
+  const [availabilityFilter, setAvailabilityFilter] = useState('在售列表');
   const [saleFilter, setSaleFilter] = useState('全部');
   const [paidFilter, setPaidFilter] = useState('全部');
   const [settlementFilter, setSettlementFilter] = useState('全部');
@@ -1843,20 +2084,24 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
     return products.filter((item) => {
       const keywordText = [item.id, item.account, item.phone].join(' ').toLowerCase();
       const matchesKeyword = keywordText.includes(keyword.toLowerCase());
+      const availabilityLabel = availabilityStatusLabel(item);
+      const matchesAvailability = availabilityFilter === '全部'
+        || (availabilityFilter === '在售列表' ? (item.isSold || isAvailableForSale(item)) : availabilityLabel === availabilityFilter);
       const matchesSale = saleFilter === '全部' || (saleFilter === '待售' ? !item.isSold : item.isSold);
       const matchesPaid = paidFilter === '全部' || (paidFilter === '未回款' ? !item.isPaid : item.isPaid);
       const matchesSettlement = settlementFilter === '全部' || (settlementFilter === '未结算' ? shouldShowPendingSettlement(item) : item.settlementStatus === 'settled');
       const createdDate = productDateValue(item);
       const matchesDateFrom = !dateFrom || createdDate >= dateFrom;
       const matchesDateTo = !dateTo || createdDate <= dateTo;
-      return matchesKeyword && matchesSale && matchesPaid && matchesSettlement && matchesDateFrom && matchesDateTo;
+      return matchesKeyword && matchesAvailability && matchesSale && matchesPaid && matchesSettlement && matchesDateFrom && matchesDateTo;
     });
-  }, [products, keyword, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo]);
+  }, [products, keyword, availabilityFilter, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo]);
   const pageCount = Math.max(1, Math.ceil(filteredProducts.length / pageSize));
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const today = localDateInput();
   const soldProducts = products.filter((item) => item.isSold);
-  const paidProducts = products.filter((item) => item.isPaid);
+  const preparingProducts = products.filter((item) => !item.isSold && productAvailabilityStatus(item) === availabilityStatuses.preparing);
+  const availableProducts = products.filter(isAvailableForSale);
   const unsettledProducts = products.filter((item) => shouldShowPendingSettlement(item));
   const todayProducts = products.filter((item) => productDateValue(item) === today);
   const todaySold = products.filter((item) => item.isSold && String(item.saleTime || item.createdAt || '').slice(0, 10) === today);
@@ -1864,9 +2109,10 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
   const unsettledHongKongReceivable = unsettledProducts.reduce((sum, item) => sum + Math.max(settlementAmounts(item).hongKongReceivable, 0), 0);
   useEffect(() => {
     setCurrentPage(1);
-  }, [keyword, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo, pageSize]);
+  }, [keyword, availabilityFilter, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo, pageSize]);
   const resetFilters = () => {
     setKeyword('');
+    setAvailabilityFilter('在售列表');
     setSaleFilter('全部');
     setPaidFilter('全部');
     setSettlementFilter('全部');
@@ -1891,15 +2137,16 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
       <div className="page-title"><h1>{title}</h1><span>产品列表、推送与结算入口</span></div>
       <div className="kpi-grid five compact">
         <Kpi icon={Box} label="产品总数" value={String(products.length)} tone="purple" />
-        <Kpi icon={ShoppingCart} label="待售" value={String(products.length - soldProducts.length)} tone="blue" />
+        <Kpi icon={ShoppingCart} label="可出售" value={String(availableProducts.length)} tone="blue" />
+        <Kpi icon={Info} label="准备中" value={String(preparingProducts.length)} tone="orange" />
         <Kpi icon={CheckCircle2} label="已售" value={String(soldProducts.length)} tone="green" />
-        <Kpi icon={CreditCard} label="已回款" value={String(paidProducts.length)} tone="purple" />
         <Kpi icon={Info} label="未结算" value={String(unsettledProducts.length)} tone="orange" />
       </div>
       <div className="list-layout">
         <Panel className="list-panel">
           <div className="filters">
             <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索 ID / 账号 / 手机号" /></label>
+            <FilterSelect label="库存状态" value={availabilityFilter} onChange={setAvailabilityFilter} options={['在售列表', '全部', '可出售', '准备中', '暂停出售', '已售']} />
             <FilterSelect label="销售状态" value={saleFilter} onChange={setSaleFilter} options={['全部', '待售', '已售']} />
             <FilterSelect label="回款状态" value={paidFilter} onChange={setPaidFilter} options={['全部', '未回款', '已回款']} />
             <FilterSelect label="结算状态" value={settlementFilter} onChange={setSettlementFilter} options={['全部', '未结算', '已结算']} />
@@ -1913,10 +2160,10 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
           {products.length === 0 ? (
             <EmptyState icon={Box} title="暂无产品" text="先新增产品，再录入账号资料、成本、销售与结算信息。" />
           ) : filteredProducts.length === 0 ? (
-            <EmptyState icon={Search} title="没有匹配结果" text="换一个关键词，或清空销售、回款、结算筛选条件。" />
+            <EmptyState icon={Search} title="没有匹配结果" text="换一个关键词，或清空库存、销售、回款、结算筛选条件。" />
           ) : (
             <>
-              <ProductTable products={paginatedProducts} onOpenWorkbench={onOpenWorkbench} onPushProduct={pushProduct} pushingId={pushState.productId} />
+              <ProductTable products={paginatedProducts} onOpenWorkbench={onOpenWorkbench} onOpenPhoneRenewals={onOpenPhoneRenewals} onPushProduct={pushProduct} pushingId={pushState.productId} />
               <div className="pagination">
                 <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
                   <option value={5}>5 条/页</option>
@@ -1981,12 +2228,12 @@ function DateRangeFilter({ from, to, onFromChange, onToChange }) {
   );
 }
 
-function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
+function ProductTable({ products, onOpenWorkbench, onOpenPhoneRenewals, onPushProduct, pushingId }) {
   return (
-    <table className="product-table">
+    <table className="product-table product-list-table">
       <thead>
         <tr>
-          <th>ID</th><th>上架时间</th><th>账号</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
+          <th>ID</th><th>上架时间</th><th>账号</th><th>手机号续费</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -1998,9 +2245,11 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
               <td>{item.id}</td>
               <td>{productDateValue(item)}</td>
               <td><CopyableAccountCell value={item.account || item.email} /></td>
+              <td><PhoneRenewalCell product={item} onOpenPhoneRenewals={onOpenPhoneRenewals} /></td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
+              <td><StatusBadge label={availabilityStatusLabel(item)} /></td>
               <td><StatusBadge label={item.isSold ? '已售' : '待售'} /></td>
               <td>{item.isSold ? <StatusBadge label={item.isPaid ? '已回款' : '未回款'} /> : '-'}</td>
               <td><StatusBadge label={settlementStatusLabel(item)} /></td>
@@ -2013,6 +2262,17 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
         })}
       </tbody>
     </table>
+  );
+}
+
+function PhoneRenewalCell({ product, onOpenPhoneRenewals }) {
+  const info = phoneRenewalInfo(product);
+  if (!info.phone) return <span className="muted-text">无手机号</span>;
+  return (
+    <button className="renewal-status-cell" type="button" onClick={onOpenPhoneRenewals} title="打开手机号续费">
+      <StatusBadge label={info.label} />
+      <span>{info.currentExpiresAt || '-'}</span>
+    </button>
   );
 }
 
@@ -2425,6 +2685,189 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
   );
 }
 
+function PhoneRenewalPage({ products, onSaveProduct, saving }) {
+  const [keyword, setKeyword] = useState('');
+  const [businessFilter, setBusinessFilter] = useState('全部');
+  const [statusFilter, setStatusFilter] = useState('待处理');
+  const [renewDays, setRenewDays] = useState(phoneRenewalDefaultDays);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [message, setMessage] = useState('');
+  const [notice, setNotice] = useState('');
+  const today = localDateInput();
+  const rows = useMemo(() => {
+    return products
+      .map((product) => phoneRenewalInfo(product, today))
+      .filter((item) => item.phone);
+  }, [products, today]);
+  const filteredRows = useMemo(() => {
+    const text = keyword.trim().toLowerCase();
+    return rows.filter((item) => {
+      const matchesKeyword = !text || [
+        item.product.id,
+        item.product.account,
+        item.product.email,
+        item.phone
+      ].join(' ').toLowerCase().includes(text);
+      const businessLabel = businessTypeConfig(productBusinessType(item.product)).label;
+      const matchesBusiness = businessFilter === '全部' || businessLabel === businessFilter;
+      const matchesStatus = statusFilter === '全部'
+        || (statusFilter === '待处理' ? item.shouldRenew : item.label === statusFilter);
+      return matchesKeyword && matchesBusiness && matchesStatus;
+    });
+  }, [rows, keyword, businessFilter, statusFilter]);
+  const selectedRows = useMemo(() => {
+    const ids = new Set(selectedIds);
+    return rows.filter((item) => ids.has(item.product.id) && item.canRenew);
+  }, [rows, selectedIds]);
+  const stats = useMemo(() => ({
+    total: rows.length,
+    due: rows.filter((item) => item.shouldRenew).length,
+    expired: rows.filter((item) => item.status === 'expired').length,
+    maxReached: rows.filter((item) => item.status === 'max_reached').length
+  }), [rows]);
+
+  const toggleSelected = (id, checked) => {
+    setSelectedIds((current) => checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id));
+  };
+  const selectDueRows = () => {
+    setSelectedIds(rows.filter((item) => item.shouldRenew && item.canRenew).map((item) => item.product.id));
+  };
+  const clearSelected = () => setSelectedIds([]);
+  const generateMessage = async () => {
+    const targets = selectedRows.length ? selectedRows : filteredRows.filter((item) => item.shouldRenew && item.canRenew);
+    if (!targets.length) {
+      setNotice('请选择可续费手机号，或切换到待处理列表。');
+      return;
+    }
+    const nextMessage = buildPhoneRenewalTelegramMessage(targets, renewDays);
+    setMessage(nextMessage);
+    setNotice(`已生成 ${targets.length} 个手机号的客服消息。`);
+    try {
+      await navigator.clipboard?.writeText(nextMessage);
+      setNotice(`已生成并复制 ${targets.length} 个手机号的客服消息。`);
+    } catch {
+      setNotice(`已生成 ${targets.length} 个手机号的客服消息，可手动复制。`);
+    }
+  };
+  const saveRenewalPatch = async (product, patch, successMessage = '手机号续费信息已保存。') => {
+    setNotice('');
+    const result = await onSaveProduct({ ...product, ...patch });
+    setNotice(result.ok ? successMessage : result.message || '保存失败，请稍后重试。');
+    return result;
+  };
+  const updateRenewal = (product, patch) => {
+    saveRenewalPatch(product, buildPhoneRenewalPatch(product, patch));
+  };
+  const confirmRenewed = async () => {
+    if (!selectedRows.length) {
+      setNotice('请先勾选已经付款并确认续费的手机号。');
+      return;
+    }
+    setNotice(`正在确认 ${selectedRows.length} 个手机号续费...`);
+    let saved = 0;
+    for (const item of selectedRows) {
+      const result = await onSaveProduct({
+        ...item.product,
+        ...renewedPhonePatch(item.product, renewDays, 'Telegram 客服确认，已付款')
+      });
+      if (result.ok) saved += 1;
+    }
+    setSelectedIds([]);
+    setNotice(saved === selectedRows.length ? `已确认 ${saved} 个手机号续费。` : `已确认 ${saved} 个，部分号码保存失败，请刷新后检查。`);
+  };
+
+  return (
+    <section className="page phone-renewal-page">
+      <div className="page-title"><h1>手机号续费</h1><span>按购买日起 12 个月上限管理话费到期和客服续费消息</span></div>
+      <div className="kpi-grid four compact">
+        <Kpi icon={MessageSquareText} label="手机号总数" value={String(stats.total)} tone="blue" />
+        <Kpi icon={Bell} label="待处理" value={String(stats.due)} tone="orange" />
+        <Kpi icon={AlertTriangle} label="已过期" value={String(stats.expired)} tone="purple" />
+        <Kpi icon={CheckCircle2} label="不再续费" value={String(stats.maxReached)} tone="green" />
+      </div>
+      {notice && <div className="inline-notice phone-renewal-notice"><Info size={15} />{notice}</div>}
+      <div className="phone-renewal-layout">
+        <Panel className="phone-renewal-list" title="续费列表" hint="默认只处理即将到期、已过期且未超过 12 个月上限的手机号">
+          <div className="filters phone-renewal-filters">
+            <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索账号 / 手机号" /></label>
+            <FilterSelect label="业务" value={businessFilter} onChange={setBusinessFilter} options={['全部', ...businessTypes.map((item) => item.label)]} />
+            <FilterSelect label="状态" value={statusFilter} onChange={setStatusFilter} options={['待处理', '全部', '正常', '待续费', '已过期', '临近上限', '不再续费', '已停用']} />
+            <FilterSelect label="续费天数" value={String(renewDays)} onChange={(value) => setRenewDays(Number(value))} options={['30', '60', '90']} />
+            <div className="filters-actions renewal-filter-actions">
+              <button className="secondary-button" type="button" onClick={selectDueRows}>选择待处理</button>
+              <button className="secondary-button" type="button" onClick={clearSelected}>清空</button>
+              <button className="primary-button" type="button" onClick={generateMessage}><Copy size={15} />生成客服消息</button>
+            </div>
+          </div>
+          <div className="phone-renewal-table-wrap">
+            <table className="product-table phone-renewal-table">
+              <thead>
+                <tr>
+                  <th>选</th>
+                  <th>业务</th>
+                  <th>账号</th>
+                  <th>手机号</th>
+                  <th>购买日</th>
+                  <th>当前到期</th>
+                  <th>最长可用至</th>
+                  <th>剩余</th>
+                  <th>状态</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map((item) => (
+                  <tr key={item.product.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(item.product.id)}
+                        disabled={!item.canRenew}
+                        onChange={(event) => toggleSelected(item.product.id, event.target.checked)}
+                      />
+                    </td>
+                    <td>{businessTypeConfig(productBusinessType(item.product)).shortLabel}</td>
+                    <td><CopyableAccountCell value={item.product.account || item.product.email} /></td>
+                    <td>{item.phone}</td>
+                    <td><input className="table-date-input" type="date" value={item.renewal.purchasedAt} onChange={(event) => updateRenewal(item.product, { purchasedAt: event.target.value })} /></td>
+                    <td><input className="table-date-input" type="date" value={item.currentExpiresAt} max={item.maxExpiresAt || undefined} onChange={(event) => updateRenewal(item.product, { currentExpiresAt: event.target.value })} /></td>
+                    <td>{item.maxExpiresAt || '-'}</td>
+                    <td>
+                      <div className="days-stack">
+                        <strong>{item.phoneDaysLeft === null ? '-' : item.phoneDaysLeft < 0 ? `超期 ${Math.abs(item.phoneDaysLeft)} 天` : `${item.phoneDaysLeft} 天`}</strong>
+                        <span>生命周期 {item.lifetimeDaysLeft === null ? '-' : Math.max(0, item.lifetimeDaysLeft)} 天</span>
+                      </div>
+                    </td>
+                    <td><StatusBadge label={item.label} /></td>
+                    <td className="actions">
+                      <button disabled={!item.canRenew || saving} onClick={() => saveRenewalPatch(item.product, renewedPhonePatch(item.product, renewDays, '单个号码确认续费'), '已确认该手机号续费。')}>确认续费</button>
+                      <button onClick={() => updateRenewal(item.product, { mode: item.renewal.mode === 'disabled' ? 'monthly' : 'disabled' })}>{item.renewal.mode === 'disabled' ? '启用' : '停用'}</button>
+                    </td>
+                  </tr>
+                ))}
+                {!filteredRows.length && <tr><td colSpan={10}>暂无匹配的手机号续费记录</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+        <Panel className="phone-renewal-message" title="客服消息" hint="生成后会自动复制，可直接发给 Telegram 客服确认金额">
+          <textarea className="format-editor renewal-message-box" value={message} onChange={(event) => setMessage(event.target.value)} placeholder="勾选手机号后生成客服消息" />
+          <div className="push-actions">
+            <button className="secondary-button" type="button" disabled={!message} onClick={() => navigator.clipboard?.writeText(message)}>复制消息</button>
+            <button className="primary-button" type="button" disabled={!selectedRows.length || saving} onClick={confirmRenewed}>
+              <CheckCircle2 size={16} />确认已付款/已续费
+            </button>
+          </div>
+          <div className="renewal-rule-box">
+            <strong>续费规则</strong>
+            <span>购买日起最多使用 12 个月，确认续费时会从当前到期日继续加天数，但不会超过最长可用日期。</span>
+          </div>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
 function CopyableAccountCell({ value }) {
   const [copied, setCopied] = useState(false);
   const text = String(value || '');
@@ -2468,6 +2911,8 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
   const [settling, setSettling] = useState(false);
   const [fullView, setFullView] = useState(null);
   const [authenticatorCode, setAuthenticatorCode] = useState({ code: '', seconds: 0, message: '' });
+  const [smsFrameUrl, setSmsFrameUrl] = useState('');
+  const [verifierLinkState, setVerifierLinkState] = useState({ loading: false, url: '' });
   const settlement = settlementAmounts(draft);
   const canEditCredentials = user?.role === 'super_admin';
   const isNewProduct = String(draft.id).startsWith('draft-');
@@ -2481,6 +2926,8 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
     setNotice('');
     setSettlementNotice('');
     setAuthenticatorCode({ code: '', seconds: 0, message: '' });
+    setSmsFrameUrl('');
+    setVerifierLinkState({ loading: false, url: '' });
     setCostDraft({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
     setShowCostForm(false);
   }, [product?.id]);
@@ -2657,6 +3104,14 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
   const openFullValue = (label, value) => {
     setFullView({ label, value: String(value || '') });
   };
+  const openSmsCodePanel = () => {
+    const url = normalizedUrl(draft.phoneSmsCode);
+    if (!url) {
+      openFullValue('手机接码', draft.phoneSmsCode);
+      return;
+    }
+    setSmsFrameUrl(url);
+  };
   const showAuthenticatorCode = async () => {
     try {
       const code = await generateTotpCode(draft.googleAuth);
@@ -2668,6 +3123,26 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
       await navigator.clipboard?.writeText(code);
     } catch (error) {
       setAuthenticatorCode({ code: '', seconds: 0, message: error.message || '验证码生成失败，请检查密钥。' });
+    }
+  };
+  const createVerifierLink = async () => {
+    if (isNewProduct || dirty) {
+      setNotice('请先保存当前产品，再生成客户接码页链接。');
+      return;
+    }
+    setVerifierLinkState({ loading: true, url: '' });
+    setNotice('正在生成客户接码页链接...');
+    try {
+      const data = await apiJson('/api/verifier-links', {
+        method: 'POST',
+        body: JSON.stringify({ productId: draft.id })
+      });
+      setVerifierLinkState({ loading: false, url: data.url || '' });
+      await navigator.clipboard?.writeText(data.url || '');
+      setNotice('客户接码页链接已生成并复制，有效期约 2 小时。');
+    } catch (error) {
+      setVerifierLinkState({ loading: false, url: '' });
+      setNotice(error.message || '接码页链接生成失败，请稍后重试。');
     }
   };
   const saveDraft = async () => {
@@ -2704,6 +3179,14 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
             {!canEditCredentials && <div className="permission-note"><Lock size={15} /> 合作伙伴可查看全部资料，但账号密码、恢复邮箱密码、谷歌验证器、备份码等敏感凭据仅超级管理员可修改。</div>}
             <div className="form-grid">
               <Input label="上架时间" type="date" value={productDateValue(draft) || localDateInput()} icon={Calendar} onChange={(value) => updateField('createdAt', value)} />
+              <label className="input-label">
+                <span>库存状态</span>
+                <div className="input-shell">
+                  <select value={productAvailabilityStatus(draft)} onChange={(event) => updateField('availabilityStatus', event.target.value)}>
+                    {availabilityStatusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+              </label>
               <Input label="账号" value={draft.account} copyable onOpenFull={openFullValue} onChange={(value) => updateField('account', value)} />
               <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
               <Input label="恢复邮箱账号" value={draft.email} copyable onOpenFull={openFullValue} onChange={(value) => updateField('email', value)} />
@@ -2713,7 +3196,19 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
               {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="谷歌验证器" value={draft.googleAuth} visible={visible.googleAuth} onToggle={() => setVisible({ ...visible, googleAuth: !visible.googleAuth })} onChange={(value) => updateField('googleAuth', value)} actionLabel={authenticatorCode.code ? `${authenticatorCode.code} · ${authenticatorCode.seconds}s` : '6位码'} onAction={showAuthenticatorCode} actionDisabled={!draft.googleAuth} actionTitle="生成并复制当前6位验证码" />}
               {!isAppleDeveloper && authenticatorCode.message && <div className="field-note">{authenticatorCode.message}</div>}
               {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="备份码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />}
-              {!isAppleDeveloper && <Input label="手机接码" value={draft.phoneSmsCode} copyable onOpenFull={openFullValue} onChange={(value) => updateField('phoneSmsCode', value)} />}
+              {!isAppleDeveloper && <Input label="手机接码" value={draft.phoneSmsCode} copyable onOpenFull={openFullValue} onChange={(value) => updateField('phoneSmsCode', value)} actionLabel="查看" onAction={openSmsCodePanel} actionDisabled={!draft.phoneSmsCode} actionTitle="在后台打开接码网址" />}
+              {!isAppleDeveloper && (
+                <div className="verifier-link-actions wide">
+                  <button className="secondary-button" type="button" disabled={verifierLinkState.loading || isNewProduct || dirty} onClick={createVerifierLink} title={dirty ? '保存当前产品后再生成接码页' : '生成并复制客户专属三栏接码页'}>
+                    <ExternalLink size={15} />{verifierLinkState.loading ? '生成中...' : '生成接码页'}
+                  </button>
+                  {verifierLinkState.url && (
+                    <button className="copy-link-button" type="button" onClick={() => navigator.clipboard?.writeText(verifierLinkState.url)}>
+                      <Copy size={14} />复制链接
+                    </button>
+                  )}
+                </div>
+              )}
               {!isAppleDeveloper && <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />}
               <label className="input-label">
                 <span>账号类型</span>
@@ -2830,6 +3325,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
         <ProfitPreview product={draft} settlement={settlement} onSettle={settleProduct} settling={settling} settlementNotice={settlementNotice} />
       </div>
       {fullView && <FullValueModal label={fullView.label} value={fullView.value} onClose={() => setFullView(null)} />}
+      {smsFrameUrl && <SmsCodeModal url={smsFrameUrl} onClose={() => setSmsFrameUrl('')} />}
     </section>
   );
 }
@@ -2969,7 +3465,7 @@ function Section({ title, subtitle, icon: Icon, action, children }) {
   );
 }
 
-function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabled = false, copyable = false, onOpenFull }) {
+function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabled = false, copyable = false, onOpenFull, actionLabel, onAction, actionDisabled = false, actionTitle }) {
   const text = String(value ?? '');
   const inputRef = useRef(null);
   const opensNativePicker = ['date', 'datetime-local', 'time', 'month', 'week'].includes(type);
@@ -2988,6 +3484,7 @@ function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabl
       >
         <input ref={inputRef} disabled={disabled} type={type} value={value ?? ''} onChange={(event) => onChange?.(event.target.value)} />
         {Icon && <Icon size={15} />}
+        {actionLabel && <button className="input-text-button" disabled={disabled || actionDisabled} type="button" title={actionTitle} onClick={(event) => { event.stopPropagation(); onAction?.(); }}>{actionLabel}</button>}
         {copyable && <CopyFieldButton value={text} disabled={disabled} />}
       </div>
     </label>
@@ -3070,6 +3567,25 @@ function FullValueModal({ label, value, onClose }) {
           <button type="button" onClick={onClose}><X size={16} /></button>
         </div>
         <textarea readOnly value={value || '暂无内容'} />
+      </section>
+    </div>
+  );
+}
+
+function SmsCodeModal({ url, onClose }) {
+  return (
+    <div className="value-modal-backdrop" onClick={onClose}>
+      <section className="value-modal sms-code-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="value-modal-head">
+          <strong>手机接码</strong>
+          <div className="modal-actions">
+            <a href={url} target="_blank" rel="noreferrer" title="新窗口打开"><ExternalLink size={15} /></a>
+            <button onClick={onClose}><X size={17} /></button>
+          </div>
+        </div>
+        <div className="sms-code-frame-wrap">
+          <iframe title="手机接码" src={url} />
+        </div>
       </section>
     </div>
   );

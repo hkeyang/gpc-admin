@@ -443,6 +443,19 @@ nav { display: grid; gap: 8px; }
 .product-table th:nth-child(8), .product-table td:nth-child(8) { width: 82px; }
 .product-table th:nth-child(9), .product-table td:nth-child(9) { width: 82px; }
 .product-table th:nth-child(10), .product-table td:nth-child(10) { width: 112px; }
+.product-list-table { min-width: 1130px; }
+.product-list-table th:nth-child(1), .product-list-table td:nth-child(1) { width: 34px; }
+.product-list-table th:nth-child(2), .product-list-table td:nth-child(2) { width: 86px; }
+.product-list-table th:nth-child(3), .product-list-table td:nth-child(3) { width: 116px; }
+.product-list-table th:nth-child(4), .product-list-table td:nth-child(4) { width: 106px; }
+.product-list-table th:nth-child(5), .product-list-table td:nth-child(5),
+.product-list-table th:nth-child(6), .product-list-table td:nth-child(6),
+.product-list-table th:nth-child(7), .product-list-table td:nth-child(7) { width: 82px; }
+.product-list-table th:nth-child(8), .product-list-table td:nth-child(8) { width: 78px; }
+.product-list-table th:nth-child(9), .product-list-table td:nth-child(9) { width: 72px; }
+.product-list-table th:nth-child(10), .product-list-table td:nth-child(10) { width: 78px; }
+.product-list-table th:nth-child(11), .product-list-table td:nth-child(11) { width: 78px; }
+.product-list-table th:nth-child(12), .product-list-table td:nth-child(12) { width: 112px; }
 .mini-table th, .mini-table td { min-height: 33px; padding: 9px 12px; text-align: left; font-size: 12px; border-bottom: 1px solid #f0f2f8; line-height: 1.4; overflow-wrap: anywhere; }
 .mini-table th { color: #68758b; background: #fbfcff; font-weight: 800; }
 .mini-table td { color: #586377; }
@@ -452,6 +465,7 @@ nav { display: grid; gap: 8px; }
 .status-badge.danger { background: #fff0f1; color: #f05b65; }
 .status-badge.primary { background: #f0edff; color: #6247ea; }
 .status-badge.warning { background: #fff6e8; color: #d98420; }
+.status-badge.muted { background: #f2f4f7; color: #778294; }
 .footer-note { color: #99a3b4; font-size: 12px; padding: 18px 10px 0; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; line-height: 1.5; }
 .footer-note span { margin-left: auto; }
 
@@ -459,7 +473,7 @@ nav { display: grid; gap: 8px; }
 .list-panel { padding: 12px; min-width: 0; overflow-x: auto; }
 .filters {
   display: grid;
-  grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(154px, 180px);
+  grid-template-columns: minmax(160px, 200px) repeat(4, 98px) minmax(160px, 180px) minmax(154px, 180px);
   gap: 10px;
   align-items: end;
   margin-bottom: 14px;
@@ -561,6 +575,26 @@ nav { display: grid; gap: 8px; }
 .product-table td.actions { padding: 0 2px; overflow: visible; }
 .actions button { color: var(--purple); font-weight: 800; font-size: 10px; }
 .actions button:disabled { opacity: .45; cursor: wait; }
+.renewal-status-cell {
+  width: 100%;
+  min-width: 0;
+  display: inline-grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  color: #6f7891;
+  text-align: left;
+}
+.renewal-status-cell:hover .status-badge { box-shadow: 0 0 0 2px rgba(79, 57, 246, .08); }
+.renewal-status-cell span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8a95aa;
+  font-size: 10px;
+  font-weight: 800;
+}
 .product-list-notice { margin: -2px 0 12px; }
 .pagination { min-height: 48px; display: flex; align-items: center; gap: 18px; color: #637088; font-size: 12px; min-width: 920px; }
 .pagination > select { border: 1px solid #e8ebf3; height: 32px; border-radius: 7px; padding: 0 10px; color: #637088; background: #fff; outline: 0; }
@@ -796,7 +830,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   margin-bottom: 10px;
 }
 .value-modal-head strong { font-size: 14px; color: #26304a; }
-.value-modal-head button {
+.value-modal-head button, .modal-actions a {
   width: 30px;
   height: 30px;
   border-radius: 7px;
@@ -805,6 +839,8 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   color: #8792a5;
   background: #f5f6fb;
 }
+.modal-actions { display: flex; align-items: center; gap: 8px; }
+.modal-actions a { text-decoration: none; }
 .value-modal textarea {
   width: 100%;
   min-height: 180px;
@@ -817,6 +853,9 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   overflow: auto;
   word-break: break-all;
 }
+.sms-code-modal { width: min(980px, 96vw); padding: 12px; }
+.sms-code-frame-wrap { height: min(680px, 78vh); border: 1px solid #e5e8f0; border-radius: 8px; overflow: hidden; background: #f8f9fc; }
+.sms-code-frame-wrap iframe { width: 100%; height: 100%; border: 0; background: #fff; }
 
 .cost-row { display: flex; align-items: end; gap: 10px; flex-wrap: wrap; }
 .cost-input { width: 128px; min-width: 112px; display: grid; gap: 6px; }
@@ -830,6 +869,31 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
 .total-cost strong { color: var(--purple); font-size: 22px; }
 .support-note { margin-top: 10px; min-height: 28px; border-radius: 6px; background: #f3f1ff; color: #7465df; display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; line-height: 1.4; }
 .permission-note { margin-bottom: 12px; min-height: 30px; border-radius: 6px; background: #fff7eb; color: #b56b10; display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; font-weight: 800; line-height: 1.4; }
+.verifier-link-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+}
+.verifier-link-actions .secondary-button,
+.verifier-link-actions .copy-link-button {
+  min-height: 32px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.verifier-link-actions .copy-link-button {
+  background: #f3f5fa;
+  color: #657083;
+}
+.verifier-link-actions button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
 .inline-notice {
   min-height: 34px;
   border-radius: 7px;
@@ -957,7 +1021,8 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
 .calc-note { text-align: center; color: #7d879a; font-size: 12px; }
 
 .push-settings-page { display: grid; gap: 14px; }
-.account-details-page { display: grid; gap: 14px; }
+.account-details-page,
+.phone-renewal-page { display: grid; gap: 14px; }
 .purchase-expenses-page { display: grid; gap: 0; }
 .purchase-summary-grid {
   display: grid;
@@ -1206,6 +1271,89 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   font: 12px/1.65 Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 .converter-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.phone-renewal-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: 14px;
+  align-items: start;
+}
+.phone-renewal-list,
+.phone-renewal-message { min-width: 0; }
+.phone-renewal-message { position: sticky; top: 64px; }
+.phone-renewal-notice { margin-bottom: 0; }
+.phone-renewal-filters {
+  grid-template-columns: minmax(210px, 260px) 116px 116px 100px minmax(330px, 1fr);
+  min-width: max-content;
+}
+.renewal-filter-actions {
+  grid-template-columns: auto auto minmax(130px, auto);
+  justify-content: end;
+}
+.phone-renewal-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+.phone-renewal-table { min-width: 1180px; }
+.phone-renewal-table th:nth-child(1),
+.phone-renewal-table td:nth-child(1) { width: 42px; text-align: center; }
+.phone-renewal-table th:nth-child(2),
+.phone-renewal-table td:nth-child(2) { width: 54px; }
+.phone-renewal-table th:nth-child(5),
+.phone-renewal-table td:nth-child(5),
+.phone-renewal-table th:nth-child(6),
+.phone-renewal-table td:nth-child(6),
+.phone-renewal-table th:nth-child(7),
+.phone-renewal-table td:nth-child(7) { width: 124px; }
+.table-date-input {
+  width: 118px;
+  height: 30px;
+  border: 1px solid #e5e8f0;
+  border-radius: 6px;
+  outline: 0;
+  padding: 0 7px;
+  color: #344059;
+  font-size: 11px;
+  font-weight: 800;
+  background: #fff;
+}
+.table-date-input:focus { border-color: #8c7cff; box-shadow: 0 0 0 3px rgba(79, 57, 246, .08); }
+.days-stack {
+  display: grid;
+  gap: 3px;
+  min-width: 94px;
+}
+.days-stack strong {
+  color: #26304a;
+  font-size: 12px;
+}
+.days-stack span {
+  color: #8a95aa;
+  font-size: 10px;
+  font-weight: 800;
+}
+.renewal-message-box {
+  min-height: 248px;
+  height: 248px;
+}
+.renewal-rule-box {
+  margin-top: 12px;
+  border: 1px solid #edf0f7;
+  border-radius: 8px;
+  background: #fbfcff;
+  padding: 12px;
+  display: grid;
+  gap: 7px;
+}
+.renewal-rule-box strong {
+  color: #26304a;
+  font-size: 13px;
+}
+.renewal-rule-box span {
+  color: #6f7891;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.6;
+}
 .push-settings-grid { display: grid; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); gap: 14px; align-items: start; }
 .push-type-panel .panel-head { align-items: center; gap: 16px; margin-bottom: 14px; }
 .push-type-panel .panel-head > div { min-width: 0; }
@@ -1393,11 +1541,14 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .settings-admin-grid { grid-template-columns: 1fr; }
   .push-settings-grid { grid-template-columns: 1fr; }
   .account-details-grid { grid-template-columns: 1fr; }
+  .phone-renewal-layout { grid-template-columns: 1fr; }
+  .phone-renewal-message { position: static; }
   .purchase-expenses-layout { grid-template-columns: 1fr; }
   .purchase-summary-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
   .purchase-editor-panel { position: static; }
-  .filters { grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(154px, 180px); }
+  .filters { grid-template-columns: minmax(160px, 200px) repeat(4, 98px) minmax(160px, 180px) minmax(154px, 180px); }
   .purchase-filters { grid-template-columns: minmax(210px, 260px) 110px minmax(170px, 190px) 70px; }
+  .phone-renewal-filters { grid-template-columns: minmax(210px, 260px) 116px 116px 100px minmax(330px, 1fr); }
 }
 
 @media (max-width: 900px) {
@@ -1408,13 +1559,14 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .nav-sublist { display: none; }
   .main { margin-left: var(--sidebar-width); width: calc(100% - var(--sidebar-width)); padding: 12px 10px 16px; }
   .page { max-width: 100%; }
-  .kpi-grid.six, .kpi-grid.five, .purchase-summary-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-  .dashboard-grid, .bottom-grid, .list-layout, .workbench-grid, .form-grid, .sale-grid, .settlement-cards, .account-details-grid, .purchase-expenses-layout, .google-developer-layout, .google-basic-form, .google-access-box, .settings-form { grid-template-columns: 1fr; }
+  .kpi-grid.six, .kpi-grid.five, .kpi-grid.four, .purchase-summary-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .dashboard-grid, .bottom-grid, .list-layout, .workbench-grid, .form-grid, .sale-grid, .settlement-cards, .account-details-grid, .phone-renewal-layout, .purchase-expenses-layout, .google-developer-layout, .google-basic-form, .google-access-box, .settings-form { grid-template-columns: 1fr; }
   .wide { grid-column: auto; }
   .filters {
-    grid-template-columns: minmax(160px, 200px) repeat(3, 98px) minmax(160px, 180px) minmax(154px, 180px);
+    grid-template-columns: minmax(160px, 200px) repeat(4, 98px) minmax(160px, 180px) minmax(154px, 180px);
     min-width: max-content;
   }
+  .phone-renewal-filters { grid-template-columns: minmax(210px, 260px) 116px 116px 100px minmax(330px, 1fr); }
   .product-table { min-width: 900px; }
   .list-panel { overflow-x: auto; }
   .settlement-info-card { width: 100%; margin-left: 0; }
@@ -1435,7 +1587,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .admin { min-width: 0; max-width: 98px; overflow-wrap: anywhere; }
   .page-title h1 { font-size: 22px; }
   .settlement-info-card { grid-template-columns: 1fr; align-items: start; gap: 5px; }
-  .kpi-grid.six, .kpi-grid.five { grid-template-columns: 1fr; }
+  .kpi-grid.six, .kpi-grid.five, .kpi-grid.four { grid-template-columns: 1fr; }
   .legend { grid-template-columns: 1fr; width: 100%; max-width: 220px; }
   .form-grid .input-label,
   .form-grid .input-label.wide {
