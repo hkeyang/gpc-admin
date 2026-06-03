@@ -836,9 +836,6 @@ function phoneRenewalInfo(product, today = localDateInput()) {
   } else if (maxReached || currentExpiresAt >= maxExpiresAt && expired) {
     status = 'max_reached';
     label = '不再续费';
-  } else if (currentExpiresAt >= maxExpiresAt) {
-    status = 'near_max';
-    label = '临近上限';
   } else if (expired) {
     status = 'expired';
     label = '已过期';
@@ -1116,8 +1113,20 @@ function normalizedUrl(value) {
   const text = String(value || '').trim();
   if (!text) return '';
   if (/^https?:\/\//i.test(text)) return text;
+  const embeddedUrl = text.match(/https?:\/\/[^\s"'<>]+/i)?.[0];
+  if (embeddedUrl) return embeddedUrl;
   if (/^[\w.-]+\.[a-z]{2,}(?:[/?#].*)?$/i.test(text)) return `https://${text}`;
+  const embeddedDomain = text.match(/(?:^|\s)([\w.-]+\.[a-z]{2,}(?:[/?#][^\s"'<>]*)?)/i)?.[1];
+  if (embeddedDomain) return `https://${embeddedDomain}`;
   return '';
+}
+
+function extractAccessPassword(value) {
+  const text = String(value || '');
+  if (!text.trim()) return '';
+  const withoutUrls = text.replace(/https?:\/\/[^\s"'<>]+/ig, ' ');
+  const match = withoutUrls.match(/(?:访问密码|登录密码|远程密码|密码|password|pass|pwd)\s*[:：=]?\s*([^\s,，;；]+)/i);
+  return match?.[1]?.trim() || '';
 }
 
 function App() {
@@ -1219,6 +1228,9 @@ function App() {
     if (isGoogleDeveloperUser && nextPage !== googleDeveloperPageId) {
       nextPage = googleDeveloperPageId;
     }
+    if (nextPage === 'phone-renewals' && !isSuperAdmin) {
+      nextPage = 'dashboard';
+    }
     if (nextPage === 'settings' && !isSuperAdmin) {
       nextPage = 'dashboard';
     }
@@ -1227,6 +1239,7 @@ function App() {
   };
 
   const openPhoneRenewals = (productId = null) => {
+    if (!isSuperAdmin) return;
     setPhoneRenewalTargetId(productId);
     setPage('phone-renewals');
   };
@@ -1237,6 +1250,9 @@ function App() {
       return;
     }
     if (authState.authenticated && page === 'settings' && !isSuperAdmin) {
+      setPage('dashboard');
+    }
+    if (authState.authenticated && page === 'phone-renewals' && !isSuperAdmin) {
       setPage('dashboard');
     }
     if (authState.authenticated && page === googleDeveloperPageId && !canUseGoogleDeveloperPage(currentUser)) {
@@ -1609,7 +1625,7 @@ function App() {
           );
         })()}
         {!isGoogleDeveloperUser && page === 'account-details' && <AccountDetailsPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
-        {!isGoogleDeveloperUser && page === 'phone-renewals' && <PhoneRenewalPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} targetProductId={phoneRenewalTargetId} />}
+        {isSuperAdmin && page === 'phone-renewals' && <PhoneRenewalPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} targetProductId={phoneRenewalTargetId} />}
         {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'purchase-expenses' && (
           <PurchaseExpensesPage
@@ -1623,7 +1639,7 @@ function App() {
         )}
         {purchaseExpenseSync.message && <div className="global-notice"><Info size={15} />{purchaseExpenseSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'workbench' && activeProduct && (
-          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={openPhoneRenewals} saving={productSync.saving} />
+          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={isSuperAdmin ? openPhoneRenewals : undefined} saving={productSync.saving} />
         )}
         {!isGoogleDeveloperUser && page === 'push-settings' && (
           <PushSettingsPage
@@ -1751,7 +1767,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount, products = [], ac
     { id: 'dashboard', label: '首页', icon: Home },
     ...businessTypes.map((item) => ({ id: item.navId, label: item.label, icon: ClipboardList })),
     { id: 'account-details', label: '账号详情', icon: UserRound },
-    { id: 'phone-renewals', label: '手机号续费', icon: MessageSquareText },
+    ...(isSuperAdmin ? [{ id: 'phone-renewals', label: '手机号续费', icon: MessageSquareText }] : []),
     { id: 'purchase-expenses', label: '代采购费用', icon: ReceiptText },
     { id: 'push-settings', label: '推送设置', icon: Send },
     { id: 'settings', label: '系统设置', icon: Settings }
@@ -2772,7 +2788,7 @@ function PhoneRenewalPage({ products, onSaveProduct, saving, targetProductId }) 
   };
   const saveRenewalPatch = async (product, patch, successMessage = '手机号续费信息已保存。') => {
     setNotice('');
-    const result = await onSaveProduct({ ...product, ...patch });
+    const result = await onSaveProduct({ id: product.id, ...patch });
     setNotice(result.ok ? successMessage : result.message || '保存失败，请稍后重试。');
     return result;
   };
@@ -2788,7 +2804,7 @@ function PhoneRenewalPage({ products, onSaveProduct, saving, targetProductId }) 
     let saved = 0;
     for (const item of selectedRows) {
       const result = await onSaveProduct({
-        ...item.product,
+        id: item.product.id,
         ...renewedPhonePatch(item.product, renewDays, 'Telegram 客服确认，已付款')
       });
       if (result.ok) saved += 1;
@@ -3214,6 +3230,19 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
     if (!verifierLinkState.url) return;
     window.open(verifierLinkState.url, '_blank', 'noopener,noreferrer');
   };
+  const openVpsRemoteUrl = () => {
+    const url = normalizedUrl(draft.vpsRemoteUrl);
+    if (!url) {
+      openFullValue('VPS 远程链接', draft.vpsRemoteUrl);
+      return;
+    }
+    const accessPassword = extractAccessPassword(draft.vpsRemoteUrl);
+    if (accessPassword) {
+      navigator.clipboard?.writeText(accessPassword).catch(() => {});
+      setNotice('VPS 访问密码已复制，远程页打开后直接粘贴并确定。');
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
   const saveDraft = async () => {
     setNotice('');
     const result = await onSave(draft);
@@ -3277,7 +3306,7 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
                   onRevoke={revokeVerifierLink}
                 />
               )}
-              {!isAppleDeveloper && <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />}
+              {!isAppleDeveloper && <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} actionIcon={ExternalLink} onAction={openVpsRemoteUrl} actionDisabled={!draft.vpsRemoteUrl} actionTitle="新标签页打开 VPS 远程链接" />}
               <label className="input-label">
                 <span>账号类型</span>
                 <div className="input-shell">
@@ -3533,7 +3562,7 @@ function Section({ title, subtitle, icon: Icon, action, children }) {
   );
 }
 
-function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabled = false, copyable = false, onOpenFull, actionLabel, onAction, actionDisabled = false, actionTitle }) {
+function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabled = false, copyable = false, onOpenFull, actionLabel, actionIcon: ActionIcon, onAction, actionDisabled = false, actionTitle }) {
   const text = String(value ?? '');
   const inputRef = useRef(null);
   const opensNativePicker = ['date', 'datetime-local', 'time', 'month', 'week'].includes(type);
@@ -3552,7 +3581,7 @@ function Input({ label, value, onChange, icon: Icon, wide, type = 'text', disabl
       >
         <input ref={inputRef} disabled={disabled} type={type} value={value ?? ''} onChange={(event) => onChange?.(event.target.value)} />
         {Icon && <Icon size={15} />}
-        {actionLabel && <button className="input-text-button" disabled={disabled || actionDisabled} type="button" title={actionTitle} onClick={(event) => { event.stopPropagation(); onAction?.(); }}>{actionLabel}</button>}
+        {(actionLabel || ActionIcon) && <button className={actionLabel ? 'input-text-button' : ''} disabled={disabled || actionDisabled} type="button" title={actionTitle} aria-label={actionTitle} onClick={(event) => { event.stopPropagation(); onAction?.(); }}>{ActionIcon ? <ActionIcon size={15} /> : actionLabel}</button>}
         {copyable && <CopyFieldButton value={text} disabled={disabled} />}
       </div>
     </label>
