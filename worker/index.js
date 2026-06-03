@@ -1,6 +1,7 @@
 const SESSION_COOKIE = 'gpc_session';
 const SESSION_MAX_AGE = 60 * 60 * 12;
-const VERIFIER_TOKEN_MAX_AGE = 60 * 60 * 2;
+const VERIFIER_TOKEN_MAX_AGE = 60 * 60 * 24 * 365;
+const VERIFIER_SHORT_CODE_LENGTH = 10;
 const DEFAULT_VERIFIER_BASE_URL = 'https://2fa.aisea.space/';
 const DEFAULT_PRODUCTS = [];
 const GOOGLE_DEVELOPER_ROLE = 'google_developer';
@@ -206,6 +207,38 @@ export class AuthStore {
       return json({ ok: true });
     }
 
+    if (url.pathname === '/verifier-links' && request.method === 'POST') {
+      const body = await readJson(request);
+      const productId = cleanLine(body.productId || body.id);
+      if (!productId) return json({ message: '产品 ID 不能为空' }, 400);
+      const product = await this.state.storage.get(`product:${productId}`);
+      if (!product) return json({ message: '产品不存在或已删除' }, 404);
+      const record = await this.createVerifierLink(productId, cleanLine(body.createdBy));
+      return json({ record }, 201);
+    }
+
+    const verifierLinkMatch = url.pathname.match(/^\/verifier-links\/([^/]+)$/);
+    if (verifierLinkMatch && request.method === 'GET') {
+      const code = normalizeVerifierCode(decodeURIComponent(verifierLinkMatch[1]));
+      const record = code ? await this.state.storage.get(`verifier_link:${code}`) : null;
+      if (!record || record.revokedAt) return json({ message: '接码链接无效，请重新生成' }, 404);
+      if (record.exp < nowSeconds()) {
+        await this.state.storage.delete(`verifier_link:${code}`);
+        return json({ message: '接码链接已过期，请重新生成' }, 410);
+      }
+      return json({ record });
+    }
+
+    if (url.pathname === '/verifier-links' && request.method === 'DELETE') {
+      const body = await readJson(request);
+      const code = normalizeVerifierCode(body.token || body.code);
+      const productId = cleanLine(body.productId || body.id);
+      const revoked = code
+        ? await this.revokeVerifierCode(code, productId)
+        : await this.revokeVerifierLinksForProduct(productId);
+      return json({ ok: true, revoked });
+    }
+
     const productMatch = url.pathname.match(/^\/products\/([^/]+)$/);
     if (productMatch && request.method === 'GET') {
       const id = decodeURIComponent(productMatch[1]);
@@ -339,6 +372,46 @@ export class AuthStore {
     return product;
   }
 
+  async createVerifierLink(productId, createdBy = '') {
+    const now = nowSeconds();
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const code = randomVerifierCode();
+      if (await this.state.storage.get(`verifier_link:${code}`)) continue;
+      const record = {
+        typ: 'verifier',
+        token: code,
+        productId,
+        createdBy,
+        iat: now,
+        exp: now + VERIFIER_TOKEN_MAX_AGE,
+        createdAt: new Date(now * 1000).toISOString()
+      };
+      await this.state.storage.put(`verifier_link:${code}`, record);
+      return record;
+    }
+    throw new Error('短码生成失败，请重试');
+  }
+
+  async revokeVerifierCode(code, productId = '') {
+    const record = await this.state.storage.get(`verifier_link:${code}`);
+    if (!record) return 0;
+    if (productId && cleanLine(record.productId) !== productId) return 0;
+    await this.state.storage.delete(`verifier_link:${code}`);
+    return 1;
+  }
+
+  async revokeVerifierLinksForProduct(productId) {
+    if (!productId) return 0;
+    const entries = await this.state.storage.list({ prefix: 'verifier_link:' });
+    let revoked = 0;
+    for (const [key, record] of entries) {
+      if (cleanLine(record.productId) !== productId) continue;
+      await this.state.storage.delete(key);
+      revoked += 1;
+    }
+    return revoked;
+  }
+
   async listGoogleDeveloperProducts(username = '') {
     const products = await this.listProducts();
     return products
@@ -451,6 +524,10 @@ async function handleApi(request, env, url) {
 
   if (url.pathname === '/api/verifier-mail-code' && request.method === 'GET') {
     return readVerifierMailCode(request, env, url);
+  }
+
+  if (url.pathname === '/api/verifier-sms-code' && request.method === 'GET') {
+    return readVerifierSmsCode(request, env, url);
   }
 
   if (url.pathname === '/api/auth/me' && request.method === 'GET') {
@@ -634,13 +711,17 @@ async function handleApi(request, env, url) {
   }
 
   if (url.pathname === '/api/verifier-links' && request.method === 'POST') {
-    return createVerifierLink(request, env);
+    return createVerifierLink(request, env, sessionUser);
+  }
+
+  if (url.pathname === '/api/verifier-links' && request.method === 'DELETE') {
+    return revokeVerifierLink(request, env);
   }
 
   return json({ message: 'Not found' }, 404);
 }
 
-async function createVerifierLink(request, env) {
+async function createVerifierLink(request, env, sessionUser) {
   const body = await readJson(request);
   const productId = cleanLine(body.productId || body.id);
   if (!productId) return json({ message: '产品 ID 不能为空' }, 400);
@@ -648,12 +729,17 @@ async function createVerifierLink(request, env) {
   const product = await fetchProductById(env, productId);
   if (!product) return json({ message: '产品不存在或已删除' }, 404);
 
-  const token = await signSession({
-    typ: 'verifier',
-    productId: product.id,
-    iat: nowSeconds(),
-    exp: nowSeconds() + VERIFIER_TOKEN_MAX_AGE
-  }, env.SESSION_SECRET);
+  const response = await authStore(env).fetch(new Request('https://auth.local/verifier-links', {
+    method: 'POST',
+    body: JSON.stringify({ productId: product.id, createdBy: sessionUser?.username || '' }),
+    headers: { 'Content-Type': 'application/json' }
+  }));
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.record?.token) {
+    return json({ message: data.message || '接码短码生成失败，请重试' }, response.status || 500);
+  }
+
+  const token = data.record.token;
   const baseUrl = normalizedVerifierBaseUrl(env.VERIFIER_BASE_URL || DEFAULT_VERIFIER_BASE_URL);
   const verifierUrl = new URL(baseUrl);
   verifierUrl.searchParams.set('token', token);
@@ -662,8 +748,25 @@ async function createVerifierLink(request, env) {
     ok: true,
     token,
     url: verifierUrl.toString(),
+    expiresAt: new Date(data.record.exp * 1000).toISOString(),
     expiresIn: VERIFIER_TOKEN_MAX_AGE
   });
+}
+
+async function revokeVerifierLink(request, env) {
+  const body = await readJson(request);
+  const productId = cleanLine(body.productId || body.id);
+  const token = normalizeVerifierCode(body.token || body.code);
+  if (!productId && !token) return json({ message: '产品 ID 或短码不能为空' }, 400);
+
+  const response = await authStore(env).fetch(new Request('https://auth.local/verifier-links', {
+    method: 'DELETE',
+    body: JSON.stringify({ productId, token }),
+    headers: { 'Content-Type': 'application/json' }
+  }));
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) return json({ message: data.message || '接码链接作废失败，请重试' }, response.status);
+  return json(data);
 }
 
 async function readVerifierSession(request, env, url) {
@@ -695,8 +798,66 @@ async function readVerifierMailCode(request, env, url) {
   }, 501, verifierCorsHeaders(request));
 }
 
+async function readVerifierSmsCode(request, env, url) {
+  const verification = await verifyVerifierToken(url.searchParams.get('token') || '', env);
+  if (verification.error) return json(verification.error, verification.status, verifierCorsHeaders(request));
+
+  const product = await fetchProductById(env, verification.payload.productId);
+  if (!product) return json({ message: '接码链接对应的产品不存在或已删除' }, 404, verifierCorsHeaders(request));
+
+  const rawSms = cleanLine(product.phoneSmsCode || product.smsLink);
+  if (!rawSms) return json({ message: '该产品没有配置手机接码网址。' }, 400, verifierCorsHeaders(request));
+
+  const directCode = extractVerificationCode(rawSms);
+  if (directCode && !normalizeHttpUrl(rawSms)) {
+    return json({
+      configured: true,
+      code: directCode,
+      message: '已从手机接码字段提取验证码。'
+    }, 200, verifierCorsHeaders(request));
+  }
+
+  const smsUrl = normalizeHttpUrl(rawSms);
+  if (!smsUrl) return json({ message: '手机接码字段不是可读取的网址。' }, 400, verifierCorsHeaders(request));
+
+  try {
+    const response = await fetch(smsUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+        'User-Agent': 'Mozilla/5.0 (compatible; GPCVerifier/1.0; +https://2fa.aisea.space)'
+      }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      return json({ message: `短信页面读取失败（HTTP ${response.status}）。` }, 502, verifierCorsHeaders(request));
+    }
+
+    const code = extractVerificationCode(text);
+    return json({
+      configured: true,
+      code,
+      message: code
+        ? '已读取最新短信验证码。'
+        : '暂未从短信页面中找到验证码，请稍后重试。'
+    }, code ? 200 : 404, verifierCorsHeaders(request));
+  } catch (error) {
+    return json({ message: '短信页面读取失败，请检查接码网址是否可访问。' }, 502, verifierCorsHeaders(request));
+  }
+}
+
 async function verifyVerifierToken(token, env) {
   if (!token) return { status: 400, error: { message: '缺少接码 token' } };
+  const code = normalizeVerifierCode(token);
+  if (code && !token.includes('.')) {
+    const response = await authStore(env).fetch(`https://auth.local/verifier-links/${encodeURIComponent(code)}`);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.record?.productId) {
+      return { status: response.status === 410 ? 401 : 401, error: { message: data.message || '接码链接无效，请重新生成' } };
+    }
+    return { payload: data.record };
+  }
+
   const payload = await verifySession(token, env.SESSION_SECRET);
   if (!payload || payload.typ !== 'verifier' || !payload.productId) {
     return { status: 401, error: { message: '接码链接无效，请重新生成' } };
@@ -819,6 +980,35 @@ async function fetchSessionUser(env, username) {
 
 function cleanLine(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function extractVerificationCode(value) {
+  const text = String(value || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+    .replace(/\s+/g, ' ')
+    .trim();
+  const labeled = text.match(/(?:验证码|驗證碼|校验码|校驗碼|动态码|動態碼|code|otp)[^\d]{0,24}(\d{4,8})/i);
+  if (labeled) return labeled[1];
+  const standalone = text.match(/(?<!\d)(\d{6})(?!\d)/);
+  if (standalone) return standalone[1];
+  const shorter = text.match(/(?<!\d)(\d{4,5}|\d{7,8})(?!\d)/);
+  return shorter ? shorter[1] : '';
+}
+
+function normalizeVerifierCode(value) {
+  const code = cleanLine(value);
+  return /^[A-Za-z0-9]{10}$/.test(code) ? code : '';
+}
+
+function randomVerifierCode() {
+  const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const bytes = new Uint8Array(VERIFIER_SHORT_CODE_LENGTH);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => alphabet[byte % alphabet.length]).join('');
 }
 
 function cleanDate(value) {

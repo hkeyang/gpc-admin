@@ -2912,7 +2912,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
   const [fullView, setFullView] = useState(null);
   const [authenticatorCode, setAuthenticatorCode] = useState({ code: '', seconds: 0, message: '' });
   const [smsFrameUrl, setSmsFrameUrl] = useState('');
-  const [verifierLinkState, setVerifierLinkState] = useState({ loading: false, url: '' });
+  const [verifierLinkState, setVerifierLinkState] = useState({ loading: false, revoking: false, url: '', token: '' });
   const settlement = settlementAmounts(draft);
   const canEditCredentials = user?.role === 'super_admin';
   const isNewProduct = String(draft.id).startsWith('draft-');
@@ -2927,7 +2927,7 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
     setSettlementNotice('');
     setAuthenticatorCode({ code: '', seconds: 0, message: '' });
     setSmsFrameUrl('');
-    setVerifierLinkState({ loading: false, url: '' });
+    setVerifierLinkState({ loading: false, revoking: false, url: '', token: '' });
     setCostDraft({ label: '', amount: '', owner: costOwners.hongKong, remark: '' });
     setShowCostForm(false);
   }, [product?.id]);
@@ -3130,20 +3130,45 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
       setNotice('请先保存当前产品，再生成客户接码页链接。');
       return;
     }
-    setVerifierLinkState({ loading: true, url: '' });
+    setVerifierLinkState({ loading: true, revoking: false, url: '', token: '' });
     setNotice('正在生成客户接码页链接...');
     try {
       const data = await apiJson('/api/verifier-links', {
         method: 'POST',
         body: JSON.stringify({ productId: draft.id })
       });
-      setVerifierLinkState({ loading: false, url: data.url || '' });
+      setVerifierLinkState({ loading: false, revoking: false, url: data.url || '', token: data.token || '' });
       await navigator.clipboard?.writeText(data.url || '');
-      setNotice('客户接码页链接已生成并复制，有效期约 2 小时。');
+      setNotice('客户接码页链接已生成并复制，有效期约 1 年。');
     } catch (error) {
-      setVerifierLinkState({ loading: false, url: '' });
+      setVerifierLinkState({ loading: false, revoking: false, url: '', token: '' });
       setNotice(error.message || '接码页链接生成失败，请稍后重试。');
     }
+  };
+  const revokeVerifierLink = async () => {
+    if (isNewProduct || dirty) {
+      setNotice('请先保存当前产品，再作废客户接码页链接。');
+      return;
+    }
+    const confirmed = window.confirm('确定作废这个产品已生成的接码页链接吗？作废后客户需要使用新链接。');
+    if (!confirmed) return;
+    setVerifierLinkState((state) => ({ ...state, revoking: true }));
+    setNotice('正在作废客户接码页链接...');
+    try {
+      const data = await apiJson('/api/verifier-links', {
+        method: 'DELETE',
+        body: JSON.stringify({ productId: draft.id })
+      });
+      setVerifierLinkState({ loading: false, revoking: false, url: '', token: '' });
+      setNotice(data.revoked ? `已作废 ${data.revoked} 个接码页链接。` : '当前产品没有可作废的接码页链接。');
+    } catch (error) {
+      setVerifierLinkState((state) => ({ ...state, revoking: false }));
+      setNotice(error.message || '接码页链接作废失败，请稍后重试。');
+    }
+  };
+  const openVerifierLink = () => {
+    if (!verifierLinkState.url) return;
+    window.open(verifierLinkState.url, '_blank', 'noopener,noreferrer');
   };
   const saveDraft = async () => {
     setNotice('');
@@ -3198,16 +3223,15 @@ function Workbench({ product, user, onSave, onSettle, saving }) {
               {!isAppleDeveloper && <SecretInput readOnly={!canEditCredentials} label="备份码" value={draft.securityCode} visible={visible.securityCode} onToggle={() => setVisible({ ...visible, securityCode: !visible.securityCode })} onChange={(value) => updateField('securityCode', value)} />}
               {!isAppleDeveloper && <Input label="手机接码" value={draft.phoneSmsCode} copyable onOpenFull={openFullValue} onChange={(value) => updateField('phoneSmsCode', value)} actionLabel="查看" onAction={openSmsCodePanel} actionDisabled={!draft.phoneSmsCode} actionTitle="在后台打开接码网址" />}
               {!isAppleDeveloper && (
-                <div className="verifier-link-actions wide">
-                  <button className="secondary-button" type="button" disabled={verifierLinkState.loading || isNewProduct || dirty} onClick={createVerifierLink} title={dirty ? '保存当前产品后再生成接码页' : '生成并复制客户专属三栏接码页'}>
-                    <ExternalLink size={15} />{verifierLinkState.loading ? '生成中...' : '生成接码页'}
-                  </button>
-                  {verifierLinkState.url && (
-                    <button className="copy-link-button" type="button" onClick={() => navigator.clipboard?.writeText(verifierLinkState.url)}>
-                      <Copy size={14} />复制链接
-                    </button>
-                  )}
-                </div>
+                <VerifierLinkField
+                  url={verifierLinkState.url}
+                  loading={verifierLinkState.loading}
+                  revoking={verifierLinkState.revoking}
+                  disabled={isNewProduct || dirty}
+                  onCreate={createVerifierLink}
+                  onOpen={openVerifierLink}
+                  onRevoke={revokeVerifierLink}
+                />
               )}
               {!isAppleDeveloper && <Input label="VPS 远程链接" value={draft.vpsRemoteUrl} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('vpsRemoteUrl', value)} />}
               <label className="input-label">
@@ -3555,6 +3579,55 @@ function CopyFieldButton({ value, disabled = false }) {
       <Copy size={15} />
       {copied && <em className="copy-feedback">已复制</em>}
     </button>
+  );
+}
+
+function VerifierLinkField({ url, loading, revoking, disabled, onCreate, onOpen, onRevoke }) {
+  const [copied, setCopied] = useState(false);
+  const hasUrl = Boolean(url);
+  const fieldDisabled = disabled || loading || revoking;
+  const placeholder = loading ? '正在生成接码链接...' : '生成接码链接';
+  const title = disabled ? '保存当前产品后再生成接码链接' : (hasUrl ? '新标签页打开接码链接' : '生成接码链接');
+  const copyLink = async (event) => {
+    event.stopPropagation();
+    if (!hasUrl) return;
+    try {
+      await navigator.clipboard?.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+  return (
+    <label className="input-label wide verifier-link-label">
+      <span>接码链接</span>
+      <div className={`verifier-link-shell ${hasUrl ? 'has-url' : 'is-empty'}`}>
+        <button
+          className="verifier-link-value"
+          type="button"
+          disabled={fieldDisabled}
+          onClick={hasUrl ? onOpen : onCreate}
+          title={title}
+        >
+          <span>{hasUrl ? url : placeholder}</span>
+        </button>
+        {hasUrl && (
+          <button className="verifier-link-icon" type="button" onClick={onOpen} title="新标签页打开接码链接" aria-label="打开接码链接">
+            <ExternalLink size={15} />
+          </button>
+        )}
+        <button className="verifier-link-icon" type="button" disabled={!hasUrl} onClick={copyLink} title="复制接码链接" aria-label="复制接码链接">
+          <Copy size={15} />
+          {copied && <em className="copy-feedback">已复制</em>}
+        </button>
+        {hasUrl && (
+          <button className="verifier-link-icon danger" type="button" disabled={revoking} onClick={onRevoke} title="作废接码链接" aria-label="作废接码链接">
+            <Trash2 size={15} />
+          </button>
+        )}
+      </div>
+    </label>
   );
 }
 
