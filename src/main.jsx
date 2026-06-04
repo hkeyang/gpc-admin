@@ -937,13 +937,14 @@ function normalizeAuthEmail(value) {
 function hotmailAuthActionLabel(state) {
   if (state.starting) return '启动中';
   if (state.polling) return '授权中';
-  if (state.auth?.status === 'authorized' && state.auth?.configured) return '重授';
+  if (state.request?.status === 'pending' && state.request?.userCode) return state.request.userCode;
+  if (state.auth?.status === 'authorized' && state.auth?.configured) return '已授权';
   if (state.auth?.status === 'reauthorize_required') return '重授';
-  return '授权';
+  return '去授权';
 }
 
 function hotmailAuthStatusText(state) {
-  if (state.request?.status === 'pending') return '请完成 Microsoft 设备码授权。';
+  if (state.request?.status === 'pending') return state.polling ? '正在等待授权完成...' : '授权链接已复制，粘贴到浏览器打开后输入上方授权码。';
   if (state.auth?.status === 'authorized' && state.auth?.configured) return 'Hotmail 已授权，客户接码页可后台读取最新邮件。';
   if (state.auth?.status === 'reauthorize_required') return state.auth.message || '授权已失效，请重新授权。';
   if (state.message) return state.message;
@@ -3358,8 +3359,16 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
         ...current,
         starting: false,
         request: { ...data, status: data.status || 'pending' },
-        message: '请打开 Microsoft 设备登录页并输入授权代码。'
+        message: '授权链接已复制，粘贴到浏览器打开后输入上方授权码。'
       }));
+      try {
+        await navigator.clipboard?.writeText(data.verificationUri || 'https://microsoft.com/devicelogin');
+      } catch {
+        setHotmailAuthState((current) => ({
+          ...current,
+          message: '授权已启动，请复制授权码并打开 Microsoft 设备登录页。'
+        }));
+      }
     } catch (error) {
       setHotmailAuthState((current) => ({
         ...current,
@@ -3454,25 +3463,18 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
               </label>
               <Input label="账号" value={draft.account} copyable onOpenFull={openFullValue} onChange={(value) => updateField('account', value)} />
               <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />
-              <Input
-                label="恢复邮箱账号"
+              <HotmailEmailField
                 value={draft.email}
-                copyable
-                onOpenFull={openFullValue}
+                canEdit={canEditCredentials}
+                state={hotmailAuthState}
+                disabled={false}
+                hideAuth={isAppleDeveloper}
                 onChange={(value) => updateField('email', value)}
-                actionLabel={!isAppleDeveloper ? hotmailAuthActionLabel(hotmailAuthState) : ''}
-                onAction={startHotmailAuth}
-                actionDisabled={!canEditCredentials || !draft.email || hotmailAuthState.starting || hotmailAuthState.polling}
-                actionTitle="授权 Hotmail 后台读取恢复邮箱验证码"
+                onOpenFull={openFullValue}
+                onStart={startHotmailAuth}
+                onRevoke={revokeHotmailAuth}
               />
-              {!isAppleDeveloper && (hotmailAuthStatusText(hotmailAuthState) || hotmailAuthState.request) && (
-                <HotmailAuthPanel
-                  state={hotmailAuthState}
-                  canEdit={canEditCredentials}
-                  onStart={startHotmailAuth}
-                  onRevoke={revokeHotmailAuth}
-                />
-              )}
+              {!isAppleDeveloper && <HotmailAuthHint state={hotmailAuthState} />}
               <SecretInput readOnly={!canEditCredentials} label="恢复邮箱密码" value={draft.recoveryEmailPassword} visible={visible.recoveryEmailPassword} onToggle={() => setVisible({ ...visible, recoveryEmailPassword: !visible.recoveryEmailPassword })} onChange={(value) => updateField('recoveryEmailPassword', value)} onOpenFull={openFullValue} />
               <PhoneInput product={draft} copyable onChange={(patch) => commitChange(patch)} onOpenRenewal={() => onOpenPhoneRenewals?.(draft.id)} />
               {isAppleDeveloper && <Input label="接码链接" value={draft.smsLink} wide copyable onOpenFull={openFullValue} onChange={(value) => updateField('smsLink', value)} />}
@@ -3856,12 +3858,14 @@ function CopyFieldButton({ value, disabled = false }) {
   );
 }
 
-function HotmailAuthPanel({ state, canEdit, onStart, onRevoke }) {
+function HotmailEmailField({ value, onChange, canEdit, state, disabled = false, hideAuth = false, onOpenFull, onStart, onRevoke }) {
   const [copied, setCopied] = useState(false);
   const request = state.request;
   const auth = state.auth;
   const isAuthorized = auth?.status === 'authorized' && auth?.configured;
-  const statusText = hotmailAuthStatusText(state);
+  const isPending = request?.status === 'pending';
+  const canUseAuthAction = !hideAuth && canEdit && value && !state.starting && !state.polling;
+  const actionLabel = hideAuth ? '' : hotmailAuthActionLabel(state);
   const copyCode = async () => {
     if (!request?.userCode) return;
     try {
@@ -3872,37 +3876,66 @@ function HotmailAuthPanel({ state, canEdit, onStart, onRevoke }) {
       setCopied(false);
     }
   };
+  const handleAuthAction = (event) => {
+    event.stopPropagation();
+    if (isPending) {
+      copyCode();
+      return;
+    }
+    if (isAuthorized || state.starting || state.polling) return;
+    if (!canUseAuthAction) return;
+    onStart?.();
+  };
 
   return (
-    <div className={`hotmail-auth-panel ${isAuthorized ? 'is-authorized' : ''}`}>
-      <div className="hotmail-auth-status">
-        <ShieldCheck size={15} />
-        <span>{state.loading ? '正在读取邮箱授权状态...' : statusText}</span>
-      </div>
-      {request && (
-        <div className="hotmail-device-box">
-          <a href={request.verificationUri || 'https://microsoft.com/devicelogin'} target="_blank" rel="noreferrer">
-            {request.verificationUri || 'https://microsoft.com/devicelogin'}
-          </a>
-          <button type="button" className="hotmail-device-code" onClick={copyCode} title="复制 Microsoft 授权代码">
-            <span>{request.userCode || '------'}</span>
-            <Copy size={14} />
-            {copied && <em>已复制</em>}
+    <label className="input-label hotmail-email-label">
+      <span>恢复邮箱账号</span>
+      <div className="input-shell hotmail-email-shell" onDoubleClick={() => onOpenFull?.('恢复邮箱账号', value)} title="双击查看完整内容">
+        <input value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} />
+        <CopyFieldButton value={value} disabled={!value} />
+        {actionLabel && (
+          <button
+            className={`hotmail-auth-chip ${isAuthorized ? 'is-authorized' : ''} ${isPending ? 'is-code' : ''}`}
+            disabled={hideAuth || (!canUseAuthAction && !isPending && !isAuthorized)}
+            type="button"
+            title={isPending ? '复制 Microsoft 授权代码' : '授权 Hotmail 后台读取恢复邮箱验证码'}
+            onClick={handleAuthAction}
+          >
+            {isAuthorized && <ShieldCheck size={13} />}
+            <span>{actionLabel}</span>
+            {isPending && <Copy size={13} />}
+            {copied && <em className="copy-feedback">已复制</em>}
           </button>
-          <small>{state.polling ? '正在等待授权完成...' : '输入代码后，本页会自动变成已授权。'}</small>
-        </div>
-      )}
-      {isAuthorized && (
-        <div className="hotmail-auth-actions">
-          <span>{auth.microsoftUser?.userPrincipalName || auth.microsoftUser?.mail || auth.email}</span>
-          {canEdit && (
-            <>
-              <button type="button" onClick={onStart} disabled={state.starting || state.polling}>重新授权</button>
-              <button type="button" className="danger" onClick={onRevoke} disabled={state.revoking}>取消授权</button>
-            </>
-          )}
-        </div>
-      )}
+        )}
+        {isAuthorized && canEdit && !hideAuth && (
+          <button
+            className="hotmail-auth-revoke"
+            type="button"
+            disabled={state.revoking}
+            title="取消恢复邮箱授权"
+            aria-label="取消恢复邮箱授权"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRevoke?.();
+            }}
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+    </label>
+  );
+}
+
+function HotmailAuthHint({ state }) {
+  const isAuthorized = state.auth?.status === 'authorized' && state.auth?.configured;
+  const text = state.loading ? '正在读取邮箱授权状态...' : hotmailAuthStatusText(state);
+  if (!text || isAuthorized) return null;
+  const tone = state.auth?.status === 'reauthorize_required' || /失败|失效|不完整|不能|请先/.test(text) ? 'is-warning' : '';
+  return (
+    <div className={`hotmail-auth-hint ${tone}`}>
+      <Info size={13} />
+      <span>{text}</span>
     </div>
   );
 }
