@@ -74,7 +74,7 @@ const businessTypes = [
     shortLabel: '谷歌',
     navId: 'products-google',
     costLabels: ['账号成本', 'VPS', 'ESIM', '写卡器', '其他成本'],
-    pushFields: ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'authenticatorCodeUrl', 'securityCode', 'phoneSmsCode', 'vpsRemoteUrl', 'remark']
+    pushFields: ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'securityCode', 'phoneSmsCode', 'verifierLinkUrl', 'vpsRemoteUrl', 'remark']
   },
   {
     id: 'appleDeveloper',
@@ -109,14 +109,15 @@ const pushFieldOptions = [
   { key: 'recoveryEmailPassword', label: '恢复邮箱密码', placeholder: '{recoveryEmailPassword}' },
   { key: 'phone', label: '恢复手机号', placeholder: '{phone}' },
   { key: 'googleAuth', label: '谷歌验证器', placeholder: '{googleAuth}' },
-  { key: 'authenticatorCodeUrl', label: '验证器接码', placeholder: '{authenticatorCodeUrl}' },
   { key: 'smsLink', label: '接码链接', placeholder: '{smsLink}' },
   { key: 'securityCode', label: '备份码', placeholder: '{securityCode}' },
   { key: 'phoneSmsCode', label: '手机接码', placeholder: '{phoneSmsCode}' },
+  { key: 'verifierLinkUrl', label: '接码链接', placeholder: '{verifierLinkUrl}' },
+  { key: 'authenticatorCodeUrl', label: '验证器接码', placeholder: '{authenticatorCodeUrl}' },
   { key: 'vpsRemoteUrl', label: 'VPS登录链接', placeholder: '{vpsRemoteUrl}' },
   { key: 'remark', label: '备注', placeholder: '{remark}' }
 ];
-const defaultPushTemplateFields = ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'authenticatorCodeUrl', 'securityCode', 'phoneSmsCode', 'vpsRemoteUrl'];
+const defaultPushTemplateFields = ['account', 'password', 'email', 'recoveryEmailPassword', 'phone', 'googleAuth', 'securityCode', 'phoneSmsCode', 'verifierLinkUrl', 'vpsRemoteUrl'];
 
 function businessTypeConfig(productType) {
   return businessTypes.find((item) => item.id === productType) || businessTypes[0];
@@ -152,7 +153,7 @@ function pushOptionsForType(productType) {
 }
 
 function defaultPushFieldsForType(productType) {
-  return pushOptionsForType(productType).slice(0, productType === 'appleDeveloper' ? 6 : 8).map((item) => item.key);
+  return pushOptionsForType(productType).slice(0, productType === 'appleDeveloper' ? 6 : 9).map((item) => item.key);
 }
 
 function createPushFormat(fields = defaultPushTemplateFields, productType = defaultBusinessType) {
@@ -995,9 +996,10 @@ function normalizePushTemplates(value) {
     const fieldKeys = new Set(fieldOptions.map((item) => item.key));
     const fallbackFields = defaultPushFieldsForType(scene);
     const storedFields = Array.isArray(template.fields) && template.fields.length ? template.fields : fallbackFields;
-    const migratedFields = scene === 'googleDeveloper' && template.id === 'list-default' && !storedFields.includes('authenticatorCodeUrl')
-      ? insertAfterField(storedFields, 'googleAuth', 'authenticatorCodeUrl')
-      : storedFields;
+    const compatibleFields = storedFields.map((field) => field === 'authenticatorCodeUrl' ? 'verifierLinkUrl' : field);
+    const migratedFields = scene === 'googleDeveloper' && template.id === 'list-default' && !compatibleFields.includes('verifierLinkUrl')
+      ? insertAfterField(compatibleFields, 'phoneSmsCode', 'verifierLinkUrl')
+      : compatibleFields;
     const fields = migratedFields
       .filter((field) => fieldKeys.has(field));
     return {
@@ -1031,6 +1033,8 @@ function normalizePushFormat(format) {
   return String(format || '')
     .replace(/(Google|谷歌)\s*验证器+/g, '$1验证器')
     .replace(/(Google|谷歌)\s*验证(?!器)/g, '$1验证器')
+    .replace(/验证器接码：\{authenticatorCodeUrl\}/g, '接码链接：{verifierLinkUrl}')
+    .replace(/\{authenticatorCodeUrl\}/g, '{verifierLinkUrl}')
     .replace(/绑定手机号/g, '恢复手机号')
     .replace(/绑定邮箱/g, '恢复邮箱账号')
     .replace(/设备安全码/g, '备份码')
@@ -1050,6 +1054,7 @@ function readStoredPushTemplates() {
 
 function productPushValue(product, key) {
   if (key === 'phone') return formatPhoneNumber(product.phoneCode, product.phone);
+  if (key === 'verifierLinkUrl') return product.verifierLinkUrl || '';
   if (key === 'authenticatorCodeUrl') return product.verifierLinkUrl || authenticatorCodeUrl;
   return product[key] ?? '';
 }
