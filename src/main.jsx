@@ -968,7 +968,11 @@ async function apiJson(url, options = {}) {
       throw error;
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.message || '请求失败');
+    if (!response.ok) {
+      const error = new Error(data.message || '请求失败');
+      error.status = response.status;
+      throw error;
+    }
     return data;
   } finally {
     window.clearTimeout(timeoutId);
@@ -1574,6 +1578,10 @@ function App() {
     setAuthState({ loading: false, authenticated: false, user: null, pendingRequestId: '' });
   };
 
+  const handleAuthExpired = () => {
+    setAuthState({ loading: false, authenticated: false, user: null, pendingRequestId: '' });
+  };
+
   if (authState.loading) {
     return <div className="auth-loading"><RefreshCw size={22} /> 正在验证登录状态...</div>;
   }
@@ -1661,7 +1669,7 @@ function App() {
         )}
         {purchaseExpenseSync.message && <div className="global-notice"><Info size={15} />{purchaseExpenseSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'workbench' && activeProduct && (
-          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={isSuperAdmin ? openPhoneRenewals : undefined} saving={productSync.saving} />
+          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={isSuperAdmin ? openPhoneRenewals : undefined} saving={productSync.saving} onAuthExpired={handleAuthExpired} />
         )}
         {!isGoogleDeveloperUser && page === 'push-settings' && (
           <PushSettingsPage
@@ -2965,7 +2973,7 @@ function EmptyState({ icon: Icon, title, text }) {
   );
 }
 
-function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, saving }) {
+function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, saving, onAuthExpired }) {
   const [draft, setDraft] = useState(product);
   const [dirty, setDirty] = useState(false);
   const [visible, setVisible] = useState({});
@@ -3030,6 +3038,15 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
         })
         .catch((error) => {
           if (cancelled) return;
+          if (error.status === 401) {
+            setHotmailAuthState((current) => ({
+              ...current,
+              loading: false,
+              message: current.starting || current.request ? current.message : ''
+            }));
+            onAuthExpired?.();
+            return;
+          }
           setHotmailAuthState((current) => ({
             ...current,
             loading: false,
