@@ -1136,6 +1136,15 @@ function buildProductPushMessage(product, template = defaultPushTemplates[0]) {
   }, format || createPushFormat(options.map((item) => item.key), productType));
 }
 
+function pushTemplateNeedsVerifierLink(template = defaultPushTemplates[0]) {
+  const fields = Array.isArray(template.fields) ? template.fields : [];
+  const format = normalizePushFormat(template.format || '');
+  return fields.includes('verifierLinkUrl')
+    || fields.includes('authenticatorCodeUrl')
+    || format.includes('{verifierLinkUrl}')
+    || format.includes('{authenticatorCodeUrl}');
+}
+
 function cleanMessageValue(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
 }
@@ -1652,6 +1661,9 @@ function App() {
               exchangeRate={exchangeRate}
               pushTemplate={listPushTemplate(productType)}
               onAddProduct={() => addProduct(productType)}
+              onProductUpdate={(updatedProduct) => {
+                setProducts((current) => sortProductsByIdDesc(current.map((item) => item.id === updatedProduct.id ? { ...item, ...updatedProduct } : item)));
+              }}
               onOpenWorkbench={(id) => {
                 setActiveId(id);
                 setPage('workbench');
@@ -2134,7 +2146,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, title }) {
+function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, onProductUpdate, title }) {
   const [keyword, setKeyword] = useState('');
   const [availabilityFilter, setAvailabilityFilter] = useState('在售列表');
   const [saleFilter, setSaleFilter] = useState('全部');
@@ -2185,12 +2197,29 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
     setDateFrom('');
     setDateTo('');
   };
+  const ensureProductVerifierLink = async (product) => {
+    if (productBusinessType(product) !== 'googleDeveloper' || !pushTemplateNeedsVerifierLink(pushTemplate) || product.verifierLinkUrl) {
+      return product;
+    }
+    const query = `productId=${encodeURIComponent(product.id)}`;
+    let data = await apiJson(`/api/verifier-links?${query}`);
+    if (!data.url) {
+      data = await apiJson('/api/verifier-links', {
+        method: 'POST',
+        body: JSON.stringify({ productId: product.id })
+      });
+    }
+    const updatedProduct = data.url ? { ...product, verifierLinkUrl: data.url } : product;
+    if (data.url) onProductUpdate?.(updatedProduct);
+    return updatedProduct;
+  };
   const pushProduct = async (product) => {
     setPushState({ productId: product.id, message: `正在推送 ${product.account || `#${product.id}`} 到 Telegram...` });
     try {
+      const pushProductInfo = await ensureProductVerifierLink(product);
       await apiJson('/api/telegram/push', {
         method: 'POST',
-        body: JSON.stringify({ message: buildProductPushMessage(product, pushTemplate) })
+        body: JSON.stringify({ message: buildProductPushMessage(pushProductInfo, pushTemplate) })
       });
       setPushState({ productId: '', message: `已推送 ${product.account || `#${product.id}`} 到 Telegram Bot。` });
     } catch (error) {
