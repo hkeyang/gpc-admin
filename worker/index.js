@@ -1008,11 +1008,13 @@ async function createVerifierLink(request, env, sessionUser) {
   const baseUrl = normalizedVerifierBaseUrl(env.VERIFIER_BASE_URL || DEFAULT_VERIFIER_BASE_URL);
   const verifierUrl = new URL(baseUrl);
   verifierUrl.searchParams.set('token', token);
+  const verifierUrlText = verifierUrl.toString();
+  await updateProductVerifierLink(env, product.id, verifierUrlText);
 
   return json({
     ok: true,
     token,
-    url: verifierUrl.toString(),
+    url: verifierUrlText,
     expiresAt: new Date(data.record.exp * 1000).toISOString(),
     expiresIn: VERIFIER_TOKEN_MAX_AGE
   });
@@ -1030,11 +1032,13 @@ async function getVerifierLink(request, env, url) {
   const baseUrl = normalizedVerifierBaseUrl(env.VERIFIER_BASE_URL || DEFAULT_VERIFIER_BASE_URL);
   const verifierUrl = new URL(baseUrl);
   verifierUrl.searchParams.set('token', data.record.token);
+  const verifierUrlText = verifierUrl.toString();
+  await updateProductVerifierLink(env, productId, verifierUrlText);
 
   return json({
     ok: true,
     token: data.record.token,
-    url: verifierUrl.toString(),
+    url: verifierUrlText,
     expiresAt: new Date(data.record.exp * 1000).toISOString(),
     expiresIn: Math.max(0, Number(data.record.exp || 0) - nowSeconds())
   });
@@ -1053,7 +1057,18 @@ async function revokeVerifierLink(request, env) {
   }));
   const data = await response.json().catch(() => ({}));
   if (!response.ok) return json({ message: data.message || '接码链接作废失败，请重试' }, response.status);
+  if (productId) await updateProductVerifierLink(env, productId, '');
   return json(data);
+}
+
+async function updateProductVerifierLink(env, productId, verifierLinkUrl) {
+  if (!productId) return null;
+  const response = await authStore(env).fetch(new Request(`https://auth.local/products/${encodeURIComponent(productId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ verifierLinkUrl }),
+    headers: { 'Content-Type': 'application/json' }
+  }));
+  return response.ok ? response : null;
 }
 
 async function getHotmailAuthStatus(env, url) {
