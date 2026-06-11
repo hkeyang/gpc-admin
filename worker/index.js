@@ -1203,10 +1203,12 @@ async function fetchProductById(env, productId) {
 
 function publicVerifierProduct(product) {
   const smsUrl = normalizeHttpUrl(product.phoneSmsCode || product.smsLink);
+  const securityCode = cleanLine(product.securityCode);
   return {
     id: product.id,
     label: cleanLine(product.account || product.email || `#${product.id}`).slice(0, 120),
     googleAuth: cleanLine(product.googleAuth),
+    securityCode,
     phone: formatPhoneNumber(product.phoneCode, product.phone),
     smsUrl,
     smsRaw: cleanLine(product.phoneSmsCode || product.smsLink),
@@ -1214,7 +1216,8 @@ function publicVerifierProduct(product) {
     capabilities: {
       totp: Boolean(cleanLine(product.googleAuth)),
       sms: Boolean(smsUrl || cleanLine(product.phoneSmsCode || product.smsLink)),
-      hotmail: Boolean(cleanLine(product.email))
+      hotmail: Boolean(cleanLine(product.email)),
+      backupCodes: Boolean(securityCode)
     }
   };
 }
