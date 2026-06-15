@@ -1296,6 +1296,9 @@ function App() {
     if (nextPage === 'settings' && !isSuperAdmin) {
       nextPage = 'dashboard';
     }
+    if (nextPage === 'push-settings' && !isSuperAdmin) {
+      nextPage = 'dashboard';
+    }
     setPageState(nextPage);
     window.history.replaceState(null, '', `#/${nextPage}`);
   };
@@ -1315,6 +1318,9 @@ function App() {
       setPage('dashboard');
     }
     if (authState.authenticated && page === 'phone-renewals' && !isSuperAdmin) {
+      setPage('dashboard');
+    }
+    if (authState.authenticated && page === 'push-settings' && !isSuperAdmin) {
       setPage('dashboard');
     }
     if (authState.authenticated && page === googleDeveloperPageId && !canUseGoogleDeveloperPage(currentUser)) {
@@ -1709,7 +1715,7 @@ function App() {
         {!isGoogleDeveloperUser && page === 'workbench' && activeProduct && (
           <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={isSuperAdmin ? openPhoneRenewals : undefined} saving={productSync.saving} onAuthExpired={handleAuthExpired} />
         )}
-        {!isGoogleDeveloperUser && page === 'push-settings' && (
+        {isSuperAdmin && page === 'push-settings' && (
           <PushSettingsPage
             user={currentUser}
             products={products}
@@ -1841,7 +1847,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount, products = [], ac
     { id: 'account-details', label: '账号详情', icon: UserRound },
     ...(isSuperAdmin ? [{ id: 'phone-renewals', label: '手机号续费', icon: MessageSquareText }] : []),
     { id: 'purchase-expenses', label: '代采购费用', icon: ReceiptText },
-    { id: 'push-settings', label: '推送设置', icon: Send },
+    ...(isSuperAdmin ? [{ id: 'push-settings', label: '推送设置', icon: Send }] : []),
     { id: 'settings', label: '系统设置', icon: Settings }
   ].filter((item) => item.id !== 'settings' || isSuperAdmin);
   const nav = [
@@ -4163,7 +4169,7 @@ function Panel({ title, hint, action, className = '', children }) {
 
 function PushSettingsPage({ user, products, templates, telegramTargets = [], telegramTargetSync, onChange, onTargetsChanged }) {
   const [activeId, setActiveId] = useState(templates[0]?.id || defaultPushTemplates[0].id);
-  const [targetDraft, setTargetDraft] = useState({ label: '', chatId: '', scenes: businessTypes.map((item) => item.id) });
+  const [targetDraft, setTargetDraft] = useState({ label: '', botToken: '', chatId: '', scenes: businessTypes.map((item) => item.id) });
   const [targetMessage, setTargetMessage] = useState('');
   const activeTemplate = templates.find((item) => item.id === activeId) || templates[0] || defaultPushTemplates[0];
   const activeBusiness = businessTypeConfig(activeTemplate.scene);
@@ -4239,7 +4245,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
         body: JSON.stringify(targetDraft)
       });
       setTargetMessage(`已新增电报接收对象：${data.target.label}`);
-      setTargetDraft({ label: '', chatId: '', scenes: businessTypes.map((item) => item.id) });
+      setTargetDraft({ label: '', botToken: '', chatId: '', scenes: businessTypes.map((item) => item.id) });
       onTargetsChanged?.();
     } catch (error) {
       setTargetMessage(error.message || '新增电报接收对象失败');
@@ -4326,7 +4332,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
           </div>
         </Panel>
       </div>
-      <Panel title="电报接收对象" hint="列表页推送必须先选择一个对象，后端只按这里的白名单发送。">
+      <Panel title="电报接收对象" hint="可给 Jeff 这类对象单独填 Bot Token；留空则使用系统统一 Bot。">
         <div className="telegram-target-layout">
           <div className="telegram-target-list">
             {telegramTargetSync?.loading && <div className="inline-notice"><RefreshCw size={15} />正在加载电报接收对象...</div>}
@@ -4335,7 +4341,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
               <div className="telegram-target-card" key={target.id}>
                 <div>
                   <strong>{target.label}</strong>
-                  <span>{targetSceneLabels(target)} · {target.source === 'env' ? '环境变量' : '后台配置'}</span>
+                  <span>{targetSceneLabels(target)} · {target.source === 'env' ? '环境变量' : '后台配置'} · {target.hasCustomBotToken ? '专属 Bot' : '统一 Bot'}</span>
                 </div>
                 <button className="danger-button" disabled={!canManageTelegramTargets || target.source === 'env'} onClick={() => deleteTelegramTarget(target)}>
                   <Trash2 size={14} /> 删除
@@ -4345,6 +4351,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
           </div>
           <div className="telegram-target-editor">
             <Input label="对象名称" value={targetDraft.label} onChange={(value) => setTargetDraft({ ...targetDraft, label: value })} disabled={!canManageTelegramTargets} />
+            <Input label="Bot Token（可选）" type="password" value={targetDraft.botToken} onChange={(value) => setTargetDraft({ ...targetDraft, botToken: value })} disabled={!canManageTelegramTargets} />
             <Input label="Chat ID（不是 Bot Token）" value={targetDraft.chatId} onChange={(value) => setTargetDraft({ ...targetDraft, chatId: value })} disabled={!canManageTelegramTargets} />
             <div className="field-picker wide-settings">
               <span>适用业务</span>

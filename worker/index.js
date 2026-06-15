@@ -460,6 +460,9 @@ export class AuthStore {
     if (isLikelyTelegramBotToken(target.chatId)) {
       return { error: '这里要填写 chat_id，不是 Bot Token。请用 getUpdates 里的 chat.id。' };
     }
+    if (target.botToken && !isLikelyTelegramBotToken(target.botToken)) {
+      return { error: 'Bot Token 格式不正确，请填写 BotFather 生成的完整 token，或留空使用系统统一 Bot。' };
+    }
     const stored = { ...target, source: 'stored', updatedAt: new Date().toISOString() };
     await this.state.storage.put(`telegram_target:${stored.id}`, stored);
     return { target: stored };
@@ -1369,11 +1372,6 @@ function verifierCorsHeaders(request) {
 }
 
 async function pushTelegramMessage(request, env) {
-  const botToken = env.TELEGRAM_BOT_TOKEN;
-  if (!botToken) {
-    return json({ message: 'Telegram Bot 未配置，请设置 TELEGRAM_BOT_TOKEN。' }, 503);
-  }
-
   const body = await readJson(request);
   const targetId = normalizeTelegramTargetId(body.targetId);
   if (!targetId) return json({ message: '请选择电报发送对象后再推送。' }, 400);
@@ -1382,6 +1380,10 @@ async function pushTelegramMessage(request, env) {
   const targetData = await targetResponse.json().catch(() => ({}));
   if (!targetResponse.ok || !targetData.target?.chatId) {
     return json({ message: targetData.message || '请选择有效的电报发送对象。' }, targetResponse.status || 400);
+  }
+  const botToken = targetData.target.botToken || env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) {
+    return json({ message: '该电报接收对象没有配置专属 Bot Token，系统统一 TELEGRAM_BOT_TOKEN 也未配置。' }, 503);
   }
 
   const phone = formatPhoneNumber(body.phoneCode, body.phone);
@@ -1671,6 +1673,10 @@ function normalizeTelegramChatId(value) {
   return String(value || '').trim().slice(0, 128);
 }
 
+function normalizeTelegramBotToken(value) {
+  return String(value || '').trim().slice(0, 256);
+}
+
 function isLikelyTelegramBotToken(value) {
   return /^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(String(value || '').trim());
 }
@@ -1712,6 +1718,7 @@ function envTelegramTargets(env) {
       id: 'default',
       label: env.TELEGRAM_CHAT_LABEL || '默认电报号',
       chatId: env.TELEGRAM_CHAT_ID,
+      botToken: env.TELEGRAM_BOT_TOKEN,
       scenes: ['googleDeveloper', 'appleDeveloper'],
       source: 'env'
     }, 'default'));
@@ -1726,6 +1733,7 @@ function sanitizeTelegramTarget(input = {}, fixedId = '') {
     id: normalizeTelegramTargetId(fixedId || input.id || fallbackId) || crypto.randomUUID().slice(0, 8),
     label,
     chatId: normalizeTelegramChatId(input.chatId || input.chat_id),
+    botToken: normalizeTelegramBotToken(input.botToken || input.bot_token),
     scenes: normalizeTelegramScenes(input.scenes),
     source: input.source === 'env' ? 'env' : 'stored'
   };
@@ -1736,6 +1744,7 @@ function publicTelegramTarget(target) {
     id: target.id,
     label: target.label,
     scenes: Array.isArray(target.scenes) ? target.scenes : [],
+    hasCustomBotToken: Boolean(target.botToken && target.source !== 'env'),
     source: target.source === 'env' ? 'env' : 'stored'
   };
 }
