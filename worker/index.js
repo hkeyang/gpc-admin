@@ -183,6 +183,45 @@ export class AuthStore {
       return json({ expenses: await this.listPurchaseExpenses() });
     }
 
+    if (url.pathname === '/telegram-targets' && request.method === 'GET') {
+      const targets = await this.listTelegramTargets();
+      return json({ targets: targets.map(publicTelegramTarget) });
+    }
+
+    if (url.pathname === '/telegram-targets' && request.method === 'POST') {
+      const body = await readJson(request);
+      const result = await this.saveTelegramTarget(body);
+      if (result.error) return json({ message: result.error }, result.status || 400);
+      return json({ target: publicTelegramTarget(result.target) }, 201);
+    }
+
+    const telegramTargetMatch = url.pathname.match(/^\/telegram-targets\/([^/]+)$/);
+    if (telegramTargetMatch && request.method === 'PUT') {
+      const id = normalizeTelegramTargetId(decodeURIComponent(telegramTargetMatch[1]));
+      const existing = await this.state.storage.get(`telegram_target:${id}`);
+      if (!existing) return json({ message: '电报接收对象不存在' }, 404);
+      const body = await readJson(request);
+      const result = await this.saveTelegramTarget({ ...existing, ...body, id }, id);
+      if (result.error) return json({ message: result.error }, result.status || 400);
+      return json({ target: publicTelegramTarget(result.target) });
+    }
+
+    if (telegramTargetMatch && request.method === 'DELETE') {
+      const id = normalizeTelegramTargetId(decodeURIComponent(telegramTargetMatch[1]));
+      const existing = await this.state.storage.get(`telegram_target:${id}`);
+      if (!existing) return json({ message: '电报接收对象不存在' }, 404);
+      await this.state.storage.delete(`telegram_target:${id}`);
+      return json({ ok: true });
+    }
+
+    const telegramTargetResolveMatch = url.pathname.match(/^\/telegram-targets\/([^/]+)\/resolve$/);
+    if (telegramTargetResolveMatch && request.method === 'GET') {
+      const id = normalizeTelegramTargetId(decodeURIComponent(telegramTargetResolveMatch[1]));
+      const target = await this.findTelegramTarget(id);
+      if (!target) return json({ message: '请选择有效的电报发送对象' }, 404);
+      return json({ target });
+    }
+
     if (url.pathname === '/purchase-expenses' && request.method === 'POST') {
       const body = await readJson(request);
       const result = await this.savePurchaseExpense(body);
@@ -387,6 +426,40 @@ export class AuthStore {
     await this.cleanupDuplicateProducts();
     const entries = await this.state.storage.list({ prefix: 'product:' });
     return [...entries.values()].sort((a, b) => compareProductIds(b.id, a.id));
+  }
+
+  async listTelegramTargets() {
+    const targets = [];
+    const seen = new Set();
+    for (const target of envTelegramTargets(this.env)) {
+      if (!target.id || seen.has(target.id)) continue;
+      seen.add(target.id);
+      targets.push(target);
+    }
+    const entries = await this.state.storage.list({ prefix: 'telegram_target:' });
+    for (const target of entries.values()) {
+      const normalized = sanitizeTelegramTarget(target, target.id);
+      if (!normalized.id || seen.has(normalized.id)) continue;
+      seen.add(normalized.id);
+      targets.push(normalized);
+    }
+    return targets;
+  }
+
+  async findTelegramTarget(id) {
+    const normalizedId = normalizeTelegramTargetId(id);
+    if (!normalizedId) return null;
+    const targets = await this.listTelegramTargets();
+    return targets.find((target) => target.id === normalizedId) || null;
+  }
+
+  async saveTelegramTarget(input, fixedId) {
+    const target = sanitizeTelegramTarget(input, fixedId);
+    if (!target.label) return { error: '请填写电报接收对象名称' };
+    if (!target.chatId) return { error: '请填写 Telegram Chat ID' };
+    const stored = { ...target, source: 'stored', updatedAt: new Date().toISOString() };
+    await this.state.storage.put(`telegram_target:${stored.id}`, stored);
+    return { target: stored };
   }
 
   async cleanupDuplicateProducts() {
@@ -948,6 +1021,29 @@ async function handleApi(request, env, url) {
     }));
   }
 
+  if (url.pathname === '/api/telegram/targets' && request.method === 'GET') {
+    return authStore(env).fetch('https://auth.local/telegram-targets');
+  }
+
+  if (url.pathname === '/api/telegram/targets' && request.method === 'POST') {
+    if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以管理电报接收对象' }, 403);
+    return authStore(env).fetch(new Request('https://auth.local/telegram-targets', {
+      method: 'POST',
+      body: await request.text(),
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  const telegramTargetMatch = url.pathname.match(/^\/api\/telegram\/targets\/([^/]+)$/);
+  if (telegramTargetMatch && ['PUT', 'DELETE'].includes(request.method)) {
+    if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以管理电报接收对象' }, 403);
+    return authStore(env).fetch(new Request(`https://auth.local/telegram-targets/${telegramTargetMatch[1]}`, {
+      method: request.method,
+      body: request.method === 'PUT' ? await request.text() : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
   if (url.pathname === '/api/telegram/push' && request.method === 'POST') {
     return pushTelegramMessage(request, env);
   }
@@ -1271,12 +1367,20 @@ function verifierCorsHeaders(request) {
 
 async function pushTelegramMessage(request, env) {
   const botToken = env.TELEGRAM_BOT_TOKEN;
-  const chatId = env.TELEGRAM_CHAT_ID;
-  if (!botToken || !chatId) {
-    return json({ message: 'Telegram Bot 未配置，请设置 TELEGRAM_BOT_TOKEN 和 TELEGRAM_CHAT_ID。' }, 503);
+  if (!botToken) {
+    return json({ message: 'Telegram Bot 未配置，请设置 TELEGRAM_BOT_TOKEN。' }, 503);
   }
 
   const body = await readJson(request);
+  const targetId = normalizeTelegramTargetId(body.targetId);
+  if (!targetId) return json({ message: '请选择电报发送对象后再推送。' }, 400);
+
+  const targetResponse = await authStore(env).fetch(`https://auth.local/telegram-targets/${encodeURIComponent(targetId)}/resolve`);
+  const targetData = await targetResponse.json().catch(() => ({}));
+  if (!targetResponse.ok || !targetData.target?.chatId) {
+    return json({ message: targetData.message || '请选择有效的电报发送对象。' }, targetResponse.status || 400);
+  }
+
   const phone = formatPhoneNumber(body.phoneCode, body.phone);
   const message = body.message ? cleanMessage(body.message) : [
     `账号：${cleanLine(body.account)}`,
@@ -1295,7 +1399,7 @@ async function pushTelegramMessage(request, env) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      chat_id: chatId,
+      chat_id: targetData.target.chatId,
       text: message,
       disable_web_page_preview: true
     })
@@ -1306,7 +1410,7 @@ async function pushTelegramMessage(request, env) {
     return json({ message: data.description || 'Telegram 推送失败，请检查 Bot Token 和 Chat ID。' }, 502);
   }
 
-  return json({ ok: true });
+  return json({ ok: true, target: publicTelegramTarget(targetData.target) });
 }
 
 function authStore(env) {
@@ -1553,6 +1657,80 @@ function formatPhoneNumber(phoneCode, phone) {
 
 function cleanMessage(value) {
   return String(value || '').replace(/\r\n?/g, '\n').trim().slice(0, 4096);
+}
+
+function normalizeTelegramTargetId(value) {
+  const text = String(value || '').trim().toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+  return text.slice(0, 48);
+}
+
+function normalizeTelegramChatId(value) {
+  return String(value || '').trim().slice(0, 128);
+}
+
+function normalizeTelegramScenes(value) {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set(['googleDeveloper', 'appleDeveloper']);
+  const scenes = [];
+  const seen = new Set();
+  for (const item of value) {
+    const scene = cleanLine(item);
+    if (!allowed.has(scene) || seen.has(scene)) continue;
+    seen.add(scene);
+    scenes.push(scene);
+  }
+  return scenes;
+}
+
+function envTelegramTargets(env) {
+  const targets = [];
+  if (env.TELEGRAM_TARGETS) {
+    try {
+      const parsed = JSON.parse(env.TELEGRAM_TARGETS);
+      if (Array.isArray(parsed)) {
+        parsed.forEach((target, index) => {
+          const normalized = sanitizeTelegramTarget(target, target.id || `env-${index + 1}`);
+          if (normalized.label && normalized.chatId) {
+            targets.push({ ...normalized, source: 'env' });
+          }
+        });
+      }
+    } catch {
+      // Ignore malformed optional target lists; the legacy target below can still work.
+    }
+  }
+
+  if (env.TELEGRAM_CHAT_ID && !targets.some((target) => target.id === 'default')) {
+    targets.push(sanitizeTelegramTarget({
+      id: 'default',
+      label: env.TELEGRAM_CHAT_LABEL || '默认电报号',
+      chatId: env.TELEGRAM_CHAT_ID,
+      scenes: ['googleDeveloper', 'appleDeveloper'],
+      source: 'env'
+    }, 'default'));
+  }
+  return targets;
+}
+
+function sanitizeTelegramTarget(input = {}, fixedId = '') {
+  const label = cleanLine(input.label || input.name).slice(0, 32);
+  const fallbackId = label ? label.toLowerCase() : crypto.randomUUID();
+  return {
+    id: normalizeTelegramTargetId(fixedId || input.id || fallbackId) || crypto.randomUUID().slice(0, 8),
+    label,
+    chatId: normalizeTelegramChatId(input.chatId || input.chat_id),
+    scenes: normalizeTelegramScenes(input.scenes),
+    source: input.source === 'env' ? 'env' : 'stored'
+  };
+}
+
+function publicTelegramTarget(target) {
+  return {
+    id: target.id,
+    label: target.label,
+    scenes: Array.isArray(target.scenes) ? target.scenes : [],
+    source: target.source === 'env' ? 'env' : 'stored'
+  };
 }
 
 async function readJson(request) {

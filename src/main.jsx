@@ -1018,6 +1018,15 @@ function normalizePushTemplates(value) {
   ];
 }
 
+function targetAppliesToScene(target, scene) {
+  return !Array.isArray(target?.scenes) || target.scenes.length === 0 || target.scenes.includes(scene);
+}
+
+function targetSceneLabels(target) {
+  if (!Array.isArray(target?.scenes) || target.scenes.length === 0) return '全部业务';
+  return target.scenes.map((scene) => businessTypeConfig(scene).shortLabel || businessTypeConfig(scene).label).join('、');
+}
+
 function insertAfterField(fields, anchor, inserted) {
   if (fields.includes(inserted)) return fields;
   const anchorIndex = fields.indexOf(anchor);
@@ -1173,6 +1182,8 @@ function App() {
   const [productSync, setProductSync] = useState({ loading: false, saving: false, message: '' });
   const [purchaseExpenseSync, setPurchaseExpenseSync] = useState({ loading: false, saving: false, message: '' });
   const [pushTemplates, setPushTemplates] = useState(readStoredPushTemplates);
+  const [telegramTargets, setTelegramTargets] = useState([]);
+  const [telegramTargetSync, setTelegramTargetSync] = useState({ loading: false, message: '' });
   const [deviceId] = useState(getDeviceId);
   const [authState, setAuthState] = useState({ loading: true, authenticated: false, user: null, pendingRequestId: '' });
   const [adminLoginRequests, setAdminLoginRequests] = useState([]);
@@ -1206,6 +1217,22 @@ function App() {
       || defaultPushTemplates.find((item) => item.scene === productType)
       || defaultPushTemplates[0];
   }, [pushTemplates]);
+
+  const loadTelegramTargets = async () => {
+    if (!authState.authenticated || isGoogleDeveloperUser) {
+      setTelegramTargets([]);
+      return;
+    }
+    setTelegramTargetSync((current) => ({ ...current, loading: true }));
+    try {
+      const data = await apiJson('/api/telegram/targets');
+      setTelegramTargets(Array.isArray(data.targets) ? data.targets : []);
+      setTelegramTargetSync({ loading: false, message: '' });
+    } catch (error) {
+      setTelegramTargets([]);
+      setTelegramTargetSync({ loading: false, message: error.message || '电报接收对象加载失败' });
+    }
+  };
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -1254,6 +1281,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(pushTemplateStorageKey, JSON.stringify(pushTemplates));
   }, [pushTemplates]);
+
+  useEffect(() => {
+    loadTelegramTargets();
+  }, [authState.authenticated, isGoogleDeveloperUser]);
 
   const setPage = (nextPage) => {
     if (isGoogleDeveloperUser && nextPage !== googleDeveloperPageId) {
@@ -1651,6 +1682,8 @@ function App() {
               products={visibleProducts}
               exchangeRate={exchangeRate}
               pushTemplate={listPushTemplate(productType)}
+              telegramTargets={telegramTargets}
+              telegramTargetsLoading={telegramTargetSync.loading}
               onAddProduct={() => addProduct(productType)}
               onOpenWorkbench={(id) => {
                 setActiveId(id);
@@ -1678,9 +1711,13 @@ function App() {
         )}
         {!isGoogleDeveloperUser && page === 'push-settings' && (
           <PushSettingsPage
+            user={currentUser}
             products={products}
             templates={pushTemplates}
+            telegramTargets={telegramTargets}
+            telegramTargetSync={telegramTargetSync}
             onChange={setPushTemplates}
+            onTargetsChanged={loadTelegramTargets}
           />
         )}
         {page === 'settings' && isSuperAdmin && (
@@ -2134,7 +2171,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, title }) {
+function ProductsPage({ productType, products, exchangeRate, pushTemplate, telegramTargets = [], telegramTargetsLoading = false, onOpenWorkbench, onAddProduct, title }) {
   const [keyword, setKeyword] = useState('');
   const [availabilityFilter, setAvailabilityFilter] = useState('在售列表');
   const [saleFilter, setSaleFilter] = useState('全部');
@@ -2145,6 +2182,8 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [pushState, setPushState] = useState({ productId: '', message: '' });
+  const [pushTargetByProduct, setPushTargetByProduct] = useState({});
+  const pushTargets = useMemo(() => telegramTargets.filter((target) => targetAppliesToScene(target, productType)), [telegramTargets, productType]);
 
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
@@ -2186,13 +2225,20 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
     setDateTo('');
   };
   const pushProduct = async (product) => {
-    setPushState({ productId: product.id, message: `正在推送 ${product.account || `#${product.id}`} 到 Telegram...` });
+    const targetId = pushTargetByProduct[product.id] || '';
+    const target = pushTargets.find((item) => item.id === targetId);
+    if (!target) {
+      setPushState({ productId: '', message: '请选择电报发送对象后再推送。' });
+      return;
+    }
+
+    setPushState({ productId: product.id, message: `正在推送 ${product.account || `#${product.id}`} 到 ${target.label}...` });
     try {
       await apiJson('/api/telegram/push', {
         method: 'POST',
-        body: JSON.stringify({ message: buildProductPushMessage(product, pushTemplate) })
+        body: JSON.stringify({ message: buildProductPushMessage(product, pushTemplate), targetId })
       });
-      setPushState({ productId: '', message: `已推送 ${product.account || `#${product.id}`} 到 Telegram Bot。` });
+      setPushState({ productId: '', message: `已推送 ${product.account || `#${product.id}`} 到 ${target.label}。` });
     } catch (error) {
       setPushState({ productId: '', message: error.message || 'Telegram 推送失败，请稍后重试。' });
     }
@@ -2229,7 +2275,16 @@ function ProductsPage({ products, exchangeRate, pushTemplate, onOpenWorkbench, o
             <EmptyState icon={Search} title="没有匹配结果" text="换一个关键词，或清空库存、销售、回款、结算筛选条件。" />
           ) : (
             <>
-              <ProductTable products={paginatedProducts} onOpenWorkbench={onOpenWorkbench} onPushProduct={pushProduct} pushingId={pushState.productId} />
+              <ProductTable
+                products={paginatedProducts}
+                telegramTargets={pushTargets}
+                telegramTargetsLoading={telegramTargetsLoading}
+                selectedTargets={pushTargetByProduct}
+                onTargetChange={(productId, targetId) => setPushTargetByProduct((current) => ({ ...current, [productId]: targetId }))}
+                onOpenWorkbench={onOpenWorkbench}
+                onPushProduct={pushProduct}
+                pushingId={pushState.productId}
+              />
               <div className="pagination">
                 <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
                   <option value={5}>5 条/页</option>
@@ -2294,7 +2349,7 @@ function DateRangeFilter({ from, to, onFromChange, onToChange }) {
   );
 }
 
-function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
+function ProductTable({ products, telegramTargets, telegramTargetsLoading, selectedTargets, onTargetChange, onOpenWorkbench, onPushProduct, pushingId }) {
   return (
     <table className="product-table product-list-table">
       <thead>
@@ -2320,7 +2375,16 @@ function ProductTable({ products, onOpenWorkbench, onPushProduct, pushingId }) {
               <td><StatusBadge label={settlementStatusLabel(item)} /></td>
               <td className="actions">
                 <button onClick={() => onOpenWorkbench(item.id)}>工作台</button>
-                <button disabled={pushingId === item.id} onClick={() => onPushProduct(item)}>{pushingId === item.id ? '推送中' : '推送'}</button>
+                <select
+                  className="telegram-target-select"
+                  value={selectedTargets[item.id] || ''}
+                  disabled={telegramTargetsLoading || pushingId === item.id || telegramTargets.length === 0}
+                  onChange={(event) => onTargetChange(item.id, event.target.value)}
+                >
+                  <option value="">{telegramTargetsLoading ? '加载中' : '选择发送对象'}</option>
+                  {telegramTargets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
+                </select>
+                <button disabled={pushingId === item.id || telegramTargetsLoading || telegramTargets.length === 0} onClick={() => onPushProduct(item)}>{pushingId === item.id ? '推送中' : '推送'}</button>
               </td>
             </tr>
           );
@@ -4080,13 +4144,16 @@ function Panel({ title, hint, action, className = '', children }) {
   );
 }
 
-function PushSettingsPage({ products, templates, onChange }) {
+function PushSettingsPage({ user, products, templates, telegramTargets = [], telegramTargetSync, onChange, onTargetsChanged }) {
   const [activeId, setActiveId] = useState(templates[0]?.id || defaultPushTemplates[0].id);
+  const [targetDraft, setTargetDraft] = useState({ label: '', chatId: '', scenes: businessTypes.map((item) => item.id) });
+  const [targetMessage, setTargetMessage] = useState('');
   const activeTemplate = templates.find((item) => item.id === activeId) || templates[0] || defaultPushTemplates[0];
   const activeBusiness = businessTypeConfig(activeTemplate.scene);
   const activePushFields = pushOptionsForType(activeBusiness.id);
   const previewProduct = products.find((item) => productBusinessType(item) === activeBusiness.id) || createBlankProduct(activeBusiness.id);
   const previewMessage = buildProductPushMessage(previewProduct, activeTemplate);
+  const canManageTelegramTargets = user?.role === 'super_admin';
 
   useEffect(() => {
     if (!templates.some((item) => item.id === activeId)) {
@@ -4139,10 +4206,45 @@ function PushSettingsPage({ products, templates, onChange }) {
       name: activeTemplate.name.includes(activeBusiness.label) ? activeTemplate.name.replace(activeBusiness.label, businessTypeConfig(nextScene).label) : activeTemplate.name
     });
   };
+  const toggleTargetScene = (scene) => {
+    setTargetDraft((current) => {
+      const exists = current.scenes.includes(scene);
+      const scenes = exists ? current.scenes.filter((item) => item !== scene) : [...current.scenes, scene];
+      return { ...current, scenes };
+    });
+  };
+  const createTelegramTarget = async () => {
+    if (!canManageTelegramTargets) return;
+    setTargetMessage('');
+    try {
+      const data = await apiJson('/api/telegram/targets', {
+        method: 'POST',
+        body: JSON.stringify(targetDraft)
+      });
+      setTargetMessage(`已新增电报接收对象：${data.target.label}`);
+      setTargetDraft({ label: '', chatId: '', scenes: businessTypes.map((item) => item.id) });
+      onTargetsChanged?.();
+    } catch (error) {
+      setTargetMessage(error.message || '新增电报接收对象失败');
+    }
+  };
+  const deleteTelegramTarget = async (target) => {
+    if (!canManageTelegramTargets || target.source === 'env') return;
+    const confirmed = window.confirm(`确定删除电报接收对象「${target.label}」吗？`);
+    if (!confirmed) return;
+    setTargetMessage('');
+    try {
+      await apiJson(`/api/telegram/targets/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
+      setTargetMessage(`已删除电报接收对象：${target.label}`);
+      onTargetsChanged?.();
+    } catch (error) {
+      setTargetMessage(error.message || '删除电报接收对象失败');
+    }
+  };
 
   return (
     <section className="page push-settings-page">
-      <div className="page-title"><h1>推送设置</h1><span>配置列表页推送类型、字段和消息格式</span></div>
+      <div className="page-title"><h1>推送设置</h1><span>配置列表页推送类型、字段、消息格式和电报接收对象</span></div>
       <div className="push-settings-grid">
         <Panel
           title="推送类型"
@@ -4207,6 +4309,45 @@ function PushSettingsPage({ products, templates, onChange }) {
           </div>
         </Panel>
       </div>
+      <Panel title="电报接收对象" hint="列表页推送必须先选择一个对象，后端只按这里的白名单发送。">
+        <div className="telegram-target-layout">
+          <div className="telegram-target-list">
+            {telegramTargetSync?.loading && <div className="inline-notice"><RefreshCw size={15} />正在加载电报接收对象...</div>}
+            {!telegramTargetSync?.loading && telegramTargets.length === 0 && <EmptyState icon={Send} title="暂无电报接收对象" text="新增对象后，列表页才能选择并推送。" />}
+            {telegramTargets.map((target) => (
+              <div className="telegram-target-card" key={target.id}>
+                <div>
+                  <strong>{target.label}</strong>
+                  <span>{targetSceneLabels(target)} · {target.source === 'env' ? '环境变量' : '后台配置'}</span>
+                </div>
+                <button className="danger-button" disabled={!canManageTelegramTargets || target.source === 'env'} onClick={() => deleteTelegramTarget(target)}>
+                  <Trash2 size={14} /> 删除
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="telegram-target-editor">
+            <Input label="对象名称" value={targetDraft.label} onChange={(value) => setTargetDraft({ ...targetDraft, label: value })} disabled={!canManageTelegramTargets} />
+            <Input label="Telegram Chat ID" value={targetDraft.chatId} onChange={(value) => setTargetDraft({ ...targetDraft, chatId: value })} disabled={!canManageTelegramTargets} />
+            <div className="field-picker wide-settings">
+              <span>适用业务</span>
+              <div className="field-grid">
+                {businessTypes.map((item) => (
+                  <label className="checkbox-chip" key={item.id}>
+                    <input type="checkbox" disabled={!canManageTelegramTargets} checked={targetDraft.scenes.includes(item.id)} onChange={() => toggleTargetScene(item.id)} />
+                    <span>{item.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <button className="primary-button" disabled={!canManageTelegramTargets || !targetDraft.label.trim() || !targetDraft.chatId.trim()} onClick={createTelegramTarget}>
+              <Plus size={15} /> 新增接收对象
+            </button>
+            {targetMessage && <div className="settings-message">{targetMessage}</div>}
+            {telegramTargetSync?.message && <div className="settings-message">{telegramTargetSync.message}</div>}
+          </div>
+        </div>
+      </Panel>
     </section>
   );
 }
