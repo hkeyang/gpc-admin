@@ -2182,7 +2182,7 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
   const [pushState, setPushState] = useState({ productId: '', message: '' });
-  const [pushTargetByProduct, setPushTargetByProduct] = useState({});
+  const [openPushMenuId, setOpenPushMenuId] = useState('');
   const pushTargets = useMemo(() => telegramTargets.filter((target) => targetAppliesToScene(target, productType)), [telegramTargets, productType]);
 
   const filteredProducts = useMemo(() => {
@@ -2224,14 +2224,22 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
     setDateFrom('');
     setDateTo('');
   };
-  const pushProduct = async (product) => {
-    const targetId = pushTargetByProduct[product.id] || '';
+  const togglePushMenu = (product) => {
+    if (telegramTargetsLoading) return;
+    if (pushTargets.length === 0) {
+      setPushState({ productId: '', message: '当前业务没有可用的电报接收对象，请先到推送设置里添加并勾选适用业务。' });
+      return;
+    }
+    setOpenPushMenuId((current) => current === product.id ? '' : product.id);
+  };
+  const pushProduct = async (product, targetId) => {
     const target = pushTargets.find((item) => item.id === targetId);
     if (!target) {
       setPushState({ productId: '', message: '请选择电报发送对象后再推送。' });
       return;
     }
 
+    setOpenPushMenuId('');
     setPushState({ productId: product.id, message: `正在推送 ${product.account || `#${product.id}`} 到 ${target.label}...` });
     try {
       await apiJson('/api/telegram/push', {
@@ -2279,8 +2287,8 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
                 products={paginatedProducts}
                 telegramTargets={pushTargets}
                 telegramTargetsLoading={telegramTargetsLoading}
-                selectedTargets={pushTargetByProduct}
-                onTargetChange={(productId, targetId) => setPushTargetByProduct((current) => ({ ...current, [productId]: targetId }))}
+                openPushMenuId={openPushMenuId}
+                onTogglePushMenu={togglePushMenu}
                 onOpenWorkbench={onOpenWorkbench}
                 onPushProduct={pushProduct}
                 pushingId={pushState.productId}
@@ -2349,7 +2357,7 @@ function DateRangeFilter({ from, to, onFromChange, onToChange }) {
   );
 }
 
-function ProductTable({ products, telegramTargets, telegramTargetsLoading, selectedTargets, onTargetChange, onOpenWorkbench, onPushProduct, pushingId }) {
+function ProductTable({ products, telegramTargets, telegramTargetsLoading, openPushMenuId, onTogglePushMenu, onOpenWorkbench, onPushProduct, pushingId }) {
   return (
     <table className="product-table product-list-table">
       <thead>
@@ -2375,16 +2383,25 @@ function ProductTable({ products, telegramTargets, telegramTargetsLoading, selec
               <td><StatusBadge label={settlementStatusLabel(item)} /></td>
               <td className="actions">
                 <button onClick={() => onOpenWorkbench(item.id)}>工作台</button>
-                <select
-                  className="telegram-target-select"
-                  value={selectedTargets[item.id] || ''}
-                  disabled={telegramTargetsLoading || pushingId === item.id || telegramTargets.length === 0}
-                  onChange={(event) => onTargetChange(item.id, event.target.value)}
-                >
-                  <option value="">{telegramTargetsLoading ? '加载中' : '选择发送对象'}</option>
-                  {telegramTargets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
-                </select>
-                <button disabled={pushingId === item.id || telegramTargetsLoading || telegramTargets.length === 0} onClick={() => onPushProduct(item)}>{pushingId === item.id ? '推送中' : '推送'}</button>
+                <div className="push-menu">
+                  <button
+                    className="push-menu-button"
+                    disabled={pushingId === item.id || telegramTargetsLoading}
+                    onClick={() => onTogglePushMenu(item)}
+                  >
+                    {pushingId === item.id ? '推送中' : telegramTargetsLoading ? '加载中' : '推送'}
+                    <ChevronDown size={12} />
+                  </button>
+                  {openPushMenuId === item.id && telegramTargets.length > 0 && (
+                    <div className="push-menu-list">
+                      {telegramTargets.map((target) => (
+                        <button key={target.id} onClick={() => onPushProduct(item, target.id)}>
+                          {target.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </td>
             </tr>
           );
@@ -4328,7 +4345,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
           </div>
           <div className="telegram-target-editor">
             <Input label="对象名称" value={targetDraft.label} onChange={(value) => setTargetDraft({ ...targetDraft, label: value })} disabled={!canManageTelegramTargets} />
-            <Input label="Telegram Chat ID" value={targetDraft.chatId} onChange={(value) => setTargetDraft({ ...targetDraft, chatId: value })} disabled={!canManageTelegramTargets} />
+            <Input label="Chat ID（不是 Bot Token）" value={targetDraft.chatId} onChange={(value) => setTargetDraft({ ...targetDraft, chatId: value })} disabled={!canManageTelegramTargets} />
             <div className="field-picker wide-settings">
               <span>适用业务</span>
               <div className="field-grid">

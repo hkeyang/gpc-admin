@@ -457,6 +457,9 @@ export class AuthStore {
     const target = sanitizeTelegramTarget(input, fixedId);
     if (!target.label) return { error: '请填写电报接收对象名称' };
     if (!target.chatId) return { error: '请填写 Telegram Chat ID' };
+    if (isLikelyTelegramBotToken(target.chatId)) {
+      return { error: '这里要填写 chat_id，不是 Bot Token。请用 getUpdates 里的 chat.id。' };
+    }
     const stored = { ...target, source: 'stored', updatedAt: new Date().toISOString() };
     await this.state.storage.put(`telegram_target:${stored.id}`, stored);
     return { target: stored };
@@ -1666,6 +1669,10 @@ function normalizeTelegramTargetId(value) {
 
 function normalizeTelegramChatId(value) {
   return String(value || '').trim().slice(0, 128);
+}
+
+function isLikelyTelegramBotToken(value) {
+  return /^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(String(value || '').trim());
 }
 
 function normalizeTelegramScenes(value) {
