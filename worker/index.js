@@ -2154,6 +2154,7 @@ function sanitizeSalesCustomer(input = {}, fixedId = '') {
 }
 
 function sanitizeSalesCustomerSnapshot(input = {}) {
+  if (!input) return null;
   const zhanfuUsername = cleanLine(input.zhanfuUsername).slice(0, 80);
   const zhanfuPhone = cleanLine(input.zhanfuPhone).slice(0, 40);
   if (!zhanfuUsername && !zhanfuPhone) return null;
