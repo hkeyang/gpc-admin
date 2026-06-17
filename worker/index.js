@@ -2,6 +2,9 @@ const SESSION_COOKIE = 'gpc_session';
 const SESSION_MAX_AGE = 60 * 60 * 12;
 const VERIFIER_TOKEN_MAX_AGE = 60 * 60 * 24 * 365;
 const VERIFIER_SHORT_CODE_LENGTH = 10;
+const VERIFIER_RECOVERY_UNLOCK_TTL = 5 * 60;
+const VERIFIER_RECOVERY_FAILURE_LIMIT = 3;
+const VERIFIER_RECOVERY_COOLDOWNS = [15 * 60, 60 * 60, 24 * 60 * 60];
 const DEFAULT_VERIFIER_BASE_URL = 'https://2fa.aisea.space/';
 const MICROSOFT_DEFAULT_TENANT = 'consumers';
 const MICROSOFT_GRAPH_SCOPE = 'offline_access User.Read Mail.Read';
@@ -154,12 +157,38 @@ export class AuthStore {
 
     if (url.pathname === '/products' && request.method === 'POST') {
       const body = await readJson(request);
-      return json({ product: await this.saveProduct(body) }, 201);
+      try {
+        return json({ product: await this.saveProduct(body) }, 201);
+      } catch (error) {
+        return json({ message: error.message || '产品保存失败' }, 400);
+      }
     }
 
     if (url.pathname === '/products' && request.method === 'DELETE') {
       const deleted = await this.clearProducts();
       return json({ ok: true, deleted });
+    }
+
+    if (url.pathname === '/sales-customers' && request.method === 'GET') {
+      return json({ customers: await this.listSalesCustomers() });
+    }
+
+    if (url.pathname === '/sales-customers' && request.method === 'POST') {
+      const body = await readJson(request);
+      const result = await this.saveSalesCustomer(body);
+      if (result.error) return json({ message: result.error, customer: result.customer || null }, result.status || 400);
+      return json({ customer: result.customer }, 201);
+    }
+
+    const salesCustomerMatch = url.pathname.match(/^\/sales-customers\/([^/]+)$/);
+    if (salesCustomerMatch && request.method === 'PUT') {
+      const id = decodeURIComponent(salesCustomerMatch[1]);
+      const existing = await this.state.storage.get(`sales_customer:${id}`);
+      if (!existing) return json({ message: '客户不存在' }, 404);
+      const body = await readJson(request);
+      const result = await this.saveSalesCustomer({ ...existing, ...body, id }, id);
+      if (result.error) return json({ message: result.error, customer: result.customer || null }, result.status || 400);
+      return json({ customer: result.customer });
     }
 
     if (url.pathname === '/google-developer-products' && request.method === 'GET') {
@@ -287,6 +316,11 @@ export class AuthStore {
       return json({ ok: true, revoked });
     }
 
+    if (url.pathname === '/verifier-recovery' && request.method === 'POST') {
+      const body = await readJson(request);
+      return this.unlockVerifierRecovery(body);
+    }
+
     if (url.pathname === '/hotmail-auth/status' && request.method === 'GET') {
       const productId = cleanLine(url.searchParams.get('productId') || url.searchParams.get('id'));
       const email = normalizeEmailKey(url.searchParams.get('email') || await this.emailForProduct(productId));
@@ -347,7 +381,11 @@ export class AuthStore {
       const existing = await this.state.storage.get(`product:${id}`);
       if (!existing) return json({ message: '产品不存在' }, 404);
       const body = await readJson(request);
-      return json({ product: await this.saveProduct({ ...existing, ...body, id }, id) });
+      try {
+        return json({ product: await this.saveProduct({ ...existing, ...body, id }, id) });
+      } catch (error) {
+        return json({ message: error.message || '产品保存失败' }, 400);
+      }
     }
 
     const productSettleMatch = url.pathname.match(/^\/products\/([^/]+)\/settle$/);
@@ -356,7 +394,11 @@ export class AuthStore {
       const existing = await this.state.storage.get(`product:${id}`);
       if (!existing) return json({ message: '产品不存在' }, 404);
       const body = await readJson(request);
-      return json({ product: await this.settleProduct(existing, body, id) });
+      try {
+        return json({ product: await this.settleProduct(existing, body, id) });
+      } catch (error) {
+        return json({ message: error.message || '结算保存失败' }, 400);
+      }
     }
 
     if (url.pathname === '/login-requests' && request.method === 'GET') {
@@ -426,6 +468,65 @@ export class AuthStore {
     await this.cleanupDuplicateProducts();
     const entries = await this.state.storage.list({ prefix: 'product:' });
     return [...entries.values()].sort((a, b) => compareProductIds(b.id, a.id));
+  }
+
+  async listSalesCustomers() {
+    const entries = await this.state.storage.list({ prefix: 'sales_customer:' });
+    return [...entries.values()]
+      .map(sanitizeSalesCustomer)
+      .sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'active' ? -1 : 1;
+        return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+      });
+  }
+
+  async findSalesCustomer(id) {
+    const normalizedId = normalizeSalesCustomerId(id);
+    if (!normalizedId) return null;
+    const customer = await this.state.storage.get(`sales_customer:${normalizedId}`);
+    return customer ? sanitizeSalesCustomer(customer, normalizedId) : null;
+  }
+
+  async findSalesCustomerByUnique(field, value, excludeId = '') {
+    const needle = field === 'phone'
+      ? normalizeSalesCustomerPhone(value)
+      : normalizeSalesCustomerUsername(value);
+    if (!needle) return null;
+    const entries = await this.state.storage.list({ prefix: 'sales_customer:' });
+    const excluded = normalizeSalesCustomerId(excludeId);
+    for (const customer of entries.values()) {
+      const normalized = sanitizeSalesCustomer(customer);
+      if (excluded && normalized.id === excluded) continue;
+      const candidate = field === 'phone'
+        ? normalizeSalesCustomerPhone(normalized.zhanfuPhone)
+        : normalizeSalesCustomerUsername(normalized.zhanfuUsername);
+      if (candidate === needle) return normalized;
+    }
+    return null;
+  }
+
+  async saveSalesCustomer(input, fixedId) {
+    const customer = sanitizeSalesCustomer(input, fixedId || input.id || crypto.randomUUID());
+    if (!customer.zhanfuUsername) return { error: '请填写站斧用户名' };
+    if (!customer.zhanfuPhone) return { error: '请填写站斧手机号' };
+
+    const usernameDuplicate = await this.findSalesCustomerByUnique('username', customer.zhanfuUsername, customer.id);
+    if (usernameDuplicate) {
+      return { error: '站斧用户名已存在，请选择已有客户。', status: 409, customer: usernameDuplicate };
+    }
+    const phoneDuplicate = await this.findSalesCustomerByUnique('phone', customer.zhanfuPhone, customer.id);
+    if (phoneDuplicate) {
+      return { error: '站斧手机号已存在，请选择已有客户。', status: 409, customer: phoneDuplicate };
+    }
+
+    const existing = await this.state.storage.get(`sales_customer:${customer.id}`);
+    const stored = {
+      ...customer,
+      createdAt: cleanLine(existing?.createdAt) || customer.createdAt,
+      updatedAt: new Date().toISOString()
+    };
+    await this.state.storage.put(`sales_customer:${stored.id}`, stored);
+    return { customer: stored };
   }
 
   async listTelegramTargets() {
@@ -502,9 +603,23 @@ export class AuthStore {
 
   async saveProduct(input, fixedId) {
     const id = fixedId ?? input.id ?? await this.nextProductId();
-    const product = sanitizeProduct(input, id);
+    const product = await this.sanitizeProductForSave(input, id);
     await this.state.storage.put(`product:${product.id}`, product);
     return product;
+  }
+
+  async sanitizeProductForSave(input, id) {
+    const product = sanitizeProduct(input, id);
+    const customerId = normalizeSalesCustomerId(input.salesCustomerId || product.salesCustomerId);
+    if (!customerId) return product;
+
+    const customer = await this.findSalesCustomer(customerId);
+    if (!customer) throw new Error('销售对象不存在，请重新选择。');
+    return {
+      ...product,
+      salesCustomerId: customer.id,
+      salesCustomerSnapshot: salesCustomerSnapshot(customer)
+    };
   }
 
   async createVerifierLink(productId, createdBy = '') {
@@ -558,6 +673,85 @@ export class AuthStore {
       if (!latest || Number(record.iat || 0) > Number(latest.iat || 0)) latest = record;
     }
     return latest;
+  }
+
+  async verifierRecordForToken(token) {
+    const rawToken = cleanLine(token);
+    if (!rawToken) return { status: 400, error: '缺少接码 token' };
+
+    const code = normalizeVerifierCode(rawToken);
+    if (code && !rawToken.includes('.')) {
+      const record = await this.state.storage.get(`verifier_link:${code}`);
+      if (!record || record.revokedAt) return { status: 401, error: '接码链接无效，请重新生成' };
+      if (record.exp < nowSeconds()) {
+        await this.state.storage.delete(`verifier_link:${code}`);
+        return { status: 401, error: '接码链接已过期，请重新生成' };
+      }
+      return { record, key: code };
+    }
+
+    const payload = await verifySession(rawToken, this.env.SESSION_SECRET);
+    if (!payload || payload.typ !== 'verifier' || !payload.productId) {
+      return { status: 401, error: '接码链接无效，请重新生成' };
+    }
+    if (payload.exp < nowSeconds()) return { status: 401, error: '接码链接已过期，请重新生成' };
+    return { record: payload, key: await sha256Base64Url(rawToken) };
+  }
+
+  async unlockVerifierRecovery(input) {
+    const resolved = await this.verifierRecordForToken(input.token);
+    if (resolved.error) return json({ message: resolved.error }, resolved.status || 401);
+
+    const now = nowSeconds();
+    const attemptKey = `verifier_recovery_attempt:${resolved.key}`;
+    const state = await this.state.storage.get(attemptKey) || { failures: 0, cooldownLevel: 0, lockedUntil: 0 };
+    if (Number(state.lockedUntil || 0) > now) {
+      return json({
+        message: cooldownMessage(state.lockedUntil),
+        lockedUntil: new Date(Number(state.lockedUntil) * 1000).toISOString()
+      }, 429);
+    }
+
+    const productId = cleanLine(resolved.record.productId);
+    const product = productId ? await this.state.storage.get(`product:${productId}`) : null;
+    if (!product) return json({ message: '接码链接对应的产品不存在或已删除' }, 404);
+
+    const expectedAccount = normalizeVerifierAccount(product.account);
+    const submittedAccount = normalizeVerifierAccount(input.account);
+    if (!expectedAccount || !submittedAccount || expectedAccount !== submittedAccount) {
+      const failures = Number(state.failures || 0) + 1;
+      const cooldownLevel = Number(state.cooldownLevel || 0);
+      const nextState = {
+        failures,
+        cooldownLevel,
+        lockedUntil: 0,
+        updatedAt: new Date(now * 1000).toISOString()
+      };
+
+      if (failures >= VERIFIER_RECOVERY_FAILURE_LIMIT) {
+        const cooldownSeconds = VERIFIER_RECOVERY_COOLDOWNS[Math.min(cooldownLevel, VERIFIER_RECOVERY_COOLDOWNS.length - 1)];
+        nextState.failures = 0;
+        nextState.cooldownLevel = cooldownLevel + 1;
+        nextState.lockedUntil = now + cooldownSeconds;
+      }
+
+      await this.state.storage.put(attemptKey, nextState);
+      return json({
+        message: nextState.lockedUntil ? cooldownMessage(nextState.lockedUntil) : 'Gmail 账号不匹配。',
+        lockedUntil: nextState.lockedUntil ? new Date(nextState.lockedUntil * 1000).toISOString() : ''
+      }, nextState.lockedUntil ? 429 : 401);
+    }
+
+    await this.state.storage.delete(attemptKey);
+    await this.state.storage.put(`verifier_recovery_view:${resolved.key}`, {
+      productId,
+      viewedAt: new Date(now * 1000).toISOString()
+    });
+
+    return json({
+      unlockedUntil: new Date((now + VERIFIER_RECOVERY_UNLOCK_TTL) * 1000).toISOString(),
+      recovery: publicVerifierRecovery(product)
+    });
   }
 
   async emailForProduct(productId) {
@@ -760,7 +954,7 @@ export class AuthStore {
   }
 
   async settleProduct(existing, patch, fixedId) {
-    const product = sanitizeProduct({
+    const product = await this.sanitizeProductForSave({
       ...existing,
       settlementStatus: 'settled',
       settlementExchangeRate: patch.settlementExchangeRate,
@@ -849,6 +1043,10 @@ async function handleApi(request, env, url) {
 
   if (url.pathname === '/api/verifier-sms-code' && request.method === 'GET') {
     return readVerifierSmsCode(request, env, url);
+  }
+
+  if (url.pathname === '/api/verifier-recovery' && request.method === 'POST') {
+    return unlockVerifierRecovery(request, env);
   }
 
   if (url.pathname === '/api/auth/me' && request.method === 'GET') {
@@ -988,6 +1186,23 @@ async function handleApi(request, env, url) {
     return authStore(env).fetch(new Request('https://auth.local/products', {
       method: request.method,
       body: request.method === 'POST' ? await request.text() : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  if (url.pathname === '/api/sales-customers' && ['GET', 'POST'].includes(request.method)) {
+    return authStore(env).fetch(new Request('https://auth.local/sales-customers', {
+      method: request.method,
+      body: request.method === 'POST' ? await request.text() : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  const salesCustomerMatch = url.pathname.match(/^\/api\/sales-customers\/([^/]+)$/);
+  if (salesCustomerMatch && request.method === 'PUT') {
+    return authStore(env).fetch(new Request(`https://auth.local/sales-customers/${salesCustomerMatch[1]}`, {
+      method: 'PUT',
+      body: await request.text(),
       headers: { 'Content-Type': 'application/json' }
     }));
   }
@@ -1289,6 +1504,16 @@ async function readVerifierSmsCode(request, env, url) {
   }
 }
 
+async function unlockVerifierRecovery(request, env) {
+  const response = await authStore(env).fetch(new Request('https://auth.local/verifier-recovery', {
+    method: 'POST',
+    body: await request.text(),
+    headers: { 'Content-Type': 'application/json' }
+  }));
+  const data = await response.json().catch(() => ({}));
+  return json(data, response.status, verifierCorsHeaders(request));
+}
+
 async function verifyVerifierToken(token, env) {
   if (!token) return { status: 400, error: { message: '缺少接码 token' } };
   const code = normalizeVerifierCode(token);
@@ -1323,20 +1548,36 @@ function publicVerifierProduct(product) {
   const securityCode = cleanLine(product.securityCode);
   return {
     id: product.id,
-    label: cleanLine(product.account || product.email || `#${product.id}`).slice(0, 120),
+    label: maskVerifierAccount(product.account) || `#${product.id}`,
     googleAuth: cleanLine(product.googleAuth),
     securityCode,
-    phone: formatPhoneNumber(product.phoneCode, product.phone),
     smsUrl,
     smsRaw: cleanLine(product.phoneSmsCode || product.smsLink),
-    hotmailEmail: cleanLine(product.email),
     capabilities: {
       totp: Boolean(cleanLine(product.googleAuth)),
       sms: Boolean(smsUrl || cleanLine(product.phoneSmsCode || product.smsLink)),
       hotmail: Boolean(cleanLine(product.email)),
-      backupCodes: Boolean(securityCode)
+      backupCodes: Boolean(securityCode),
+      recovery: Boolean(cleanLine(product.account))
     }
   };
+}
+
+function publicVerifierRecovery(product) {
+  return {
+    recoveryEmail: cleanLine(product.email),
+    recoveryEmailPassword: cleanLine(product.recoveryEmailPassword),
+    recoveryPhone: formatPhoneNumber(product.phoneCode, product.phone)
+  };
+}
+
+function maskVerifierAccount(value) {
+  const text = cleanLine(value).slice(0, 120);
+  const match = text.match(/^([^@\s]+)@([^@\s]+\.[^@\s]+)$/);
+  if (!match) return text ? '已绑定账号' : '';
+  const [, name, domain] = match;
+  const prefix = name.slice(0, Math.min(3, name.length));
+  return `${prefix}***@${domain}`;
 }
 
 function normalizedVerifierBaseUrl(value) {
@@ -1437,6 +1678,17 @@ function cleanLine(value) {
 
 function normalizeEmailKey(value) {
   return cleanLine(value).toLowerCase();
+}
+
+function normalizeVerifierAccount(value) {
+  return cleanLine(value).toLowerCase();
+}
+
+function cooldownMessage(lockedUntil) {
+  const seconds = Math.max(0, Number(lockedUntil || 0) - nowSeconds());
+  if (seconds >= 23 * 60 * 60) return '尝试次数过多，请 24 小时后再试。';
+  if (seconds >= 55 * 60) return '尝试次数过多，请 1 小时后再试。';
+  return '尝试次数过多，请 15 分钟后再试。';
 }
 
 function normalizeMicrosoftTenant(value) {
@@ -1862,6 +2114,8 @@ function sanitizeProduct(input, id) {
     saleTime: cleanLine(input.saleTime),
     isSold: Boolean(input.isSold),
     isPaid: Boolean(input.isPaid),
+    salesCustomerId: normalizeSalesCustomerId(input.salesCustomerId),
+    salesCustomerSnapshot: sanitizeSalesCustomerSnapshot(input.salesCustomerSnapshot),
     settlementStatus: input.settlementStatus === 'settled' ? 'settled' : 'unsettled',
     settledAt: cleanLine(input.settledAt),
     settlementExchangeRate: positiveNumberOrNull(input.settlementExchangeRate),
@@ -1883,6 +2137,40 @@ function sanitizeProduct(input, id) {
     phoneRenewal: sanitizePhoneRenewal(input.phoneRenewal, input),
     googleDeveloperAccess: sanitizeGoogleDeveloperAccess(input.googleDeveloperAccess, input),
     updatedAt
+  };
+}
+
+function sanitizeSalesCustomer(input = {}, fixedId = '') {
+  const now = new Date().toISOString();
+  return {
+    id: normalizeSalesCustomerId(fixedId || input.id || crypto.randomUUID()),
+    zhanfuUsername: cleanLine(input.zhanfuUsername).slice(0, 80),
+    zhanfuPhone: cleanLine(input.zhanfuPhone).slice(0, 40),
+    status: input.status === 'disabled' ? 'disabled' : 'active',
+    remark: String(input.remark || '').slice(0, 500),
+    createdAt: cleanLine(input.createdAt) || now,
+    updatedAt: cleanLine(input.updatedAt) || now
+  };
+}
+
+function sanitizeSalesCustomerSnapshot(input = {}) {
+  const zhanfuUsername = cleanLine(input.zhanfuUsername).slice(0, 80);
+  const zhanfuPhone = cleanLine(input.zhanfuPhone).slice(0, 40);
+  if (!zhanfuUsername && !zhanfuPhone) return null;
+  return {
+    id: normalizeSalesCustomerId(input.id),
+    zhanfuUsername,
+    zhanfuPhone,
+    capturedAt: cleanLine(input.capturedAt) || new Date().toISOString()
+  };
+}
+
+function salesCustomerSnapshot(customer) {
+  return {
+    id: customer.id,
+    zhanfuUsername: customer.zhanfuUsername,
+    zhanfuPhone: customer.zhanfuPhone,
+    capturedAt: new Date().toISOString()
   };
 }
 
@@ -2081,6 +2369,7 @@ function mergeDuplicateProduct(base, duplicate) {
     'vpsPassword',
     'remark',
     'saleTime',
+    'salesCustomerId',
     'settledAt',
     'settlementExchangeRate',
     'settlementShareCnyHongKong',
@@ -2114,6 +2403,10 @@ function mergeDuplicateProduct(base, duplicate) {
   }
   if (duplicate.phoneRenewal?.currentExpiresAt) {
     merged.phoneRenewal = duplicate.phoneRenewal;
+  }
+  if (duplicate.salesCustomerId) {
+    merged.salesCustomerId = duplicate.salesCustomerId;
+    merged.salesCustomerSnapshot = duplicate.salesCustomerSnapshot || merged.salesCustomerSnapshot || null;
   }
   if (numberOrZero(duplicate.salePrice) > 0) merged.salePrice = numberOrZero(duplicate.salePrice);
 
@@ -2152,6 +2445,18 @@ function sanitizeCost(item, index) {
 function normalizeProductId(value) {
   const number = Number(value);
   return Number.isFinite(number) && String(value).trim() !== '' ? number : cleanLine(value);
+}
+
+function normalizeSalesCustomerId(value) {
+  return cleanLine(value).slice(0, 80);
+}
+
+function normalizeSalesCustomerUsername(value) {
+  return cleanLine(value).toLowerCase();
+}
+
+function normalizeSalesCustomerPhone(value) {
+  return cleanLine(value).replace(/[^\d+]+/g, '').replace(/^\+/, '');
 }
 
 function normalizeProductType(value) {
@@ -2290,6 +2595,11 @@ async function hmac(value, secret) {
   );
   const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value));
   return base64UrlEncodeBytes(new Uint8Array(signature));
+}
+
+async function sha256Base64Url(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return base64UrlEncodeBytes(new Uint8Array(digest));
 }
 
 async function hashPbkdf2(password) {

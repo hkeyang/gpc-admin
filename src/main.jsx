@@ -336,6 +336,8 @@ function createBlankProduct(productType = defaultBusinessType) {
     accountInfoFormatted: '',
     phoneRenewal: createBlankPhoneRenewal({ createdAt }),
     googleDeveloperAccess: createBlankGoogleDeveloperAccess(),
+    salesCustomerId: '',
+    salesCustomerSnapshot: null,
     updatedAt: ''
   };
 }
@@ -972,6 +974,7 @@ async function apiJson(url, options = {}) {
     if (!response.ok) {
       const error = new Error(data.message || '请求失败');
       error.status = response.status;
+      error.data = data;
       throw error;
     }
     return data;
@@ -1149,6 +1152,61 @@ function cleanMessageValue(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
 }
 
+function normalizeSalesCustomerUsername(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function normalizeSalesCustomerPhone(value) {
+  return String(value || '').trim().replace(/[^\d+]+/g, '').replace(/^\+/, '');
+}
+
+function normalizeSalesCustomer(customer = {}) {
+  return {
+    id: String(customer.id || '').trim(),
+    zhanfuUsername: String(customer.zhanfuUsername || '').trim(),
+    zhanfuPhone: String(customer.zhanfuPhone || '').trim(),
+    status: customer.status === 'disabled' ? 'disabled' : 'active',
+    remark: String(customer.remark || ''),
+    createdAt: customer.createdAt || '',
+    updatedAt: customer.updatedAt || ''
+  };
+}
+
+function sortSalesCustomers(customers = []) {
+  return customers.map(normalizeSalesCustomer).sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'active' ? -1 : 1;
+    return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+  });
+}
+
+function salesCustomerSnapshot(product = {}, customers = []) {
+  const selected = customers.find((item) => String(item.id) === String(product.salesCustomerId));
+  if (selected) return normalizeSalesCustomer(selected);
+  const snapshot = product.salesCustomerSnapshot || {};
+  return normalizeSalesCustomer({
+    id: product.salesCustomerId || snapshot.id,
+    zhanfuUsername: snapshot.zhanfuUsername,
+    zhanfuPhone: snapshot.zhanfuPhone,
+    status: 'active'
+  });
+}
+
+function filterSalesCustomers(customers = [], keyword = '', { includeDisabled = false, limit = 10 } = {}) {
+  const query = String(keyword || '').trim().toLowerCase();
+  const phoneQuery = normalizeSalesCustomerPhone(keyword);
+  const rows = customers.filter((customer) => {
+    const item = normalizeSalesCustomer(customer);
+    if (!includeDisabled && item.status === 'disabled') return false;
+    if (!query) return true;
+    const username = normalizeSalesCustomerUsername(item.zhanfuUsername);
+    const phone = normalizeSalesCustomerPhone(item.zhanfuPhone);
+    return username.includes(query)
+      || phone.includes(phoneQuery)
+      || (phoneQuery.length >= 2 && phone.endsWith(phoneQuery));
+  });
+  return rows.slice(0, limit);
+}
+
 function normalizedUrl(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -1175,11 +1233,13 @@ function App() {
     return hashPage === 'products' ? businessTypes[0].navId : hashPage;
   });
   const [products, setProducts] = useState(initialProducts);
+  const [salesCustomers, setSalesCustomers] = useState([]);
   const [purchaseExpenses, setPurchaseExpenses] = useState([]);
   const [activeId, setActiveId] = useState(initialProducts[0]?.id || 1);
   const [phoneRenewalTargetId, setPhoneRenewalTargetId] = useState(null);
   const [draftProduct, setDraftProduct] = useState(null);
   const [productSync, setProductSync] = useState({ loading: false, saving: false, message: '' });
+  const [salesCustomerSync, setSalesCustomerSync] = useState({ loading: false, saving: false, message: '' });
   const [purchaseExpenseSync, setPurchaseExpenseSync] = useState({ loading: false, saving: false, message: '' });
   const [pushTemplates, setPushTemplates] = useState(readStoredPushTemplates);
   const [telegramTargets, setTelegramTargets] = useState([]);
@@ -1351,6 +1411,28 @@ function App() {
 
   useEffect(() => {
     if (!authState.authenticated || isGoogleDeveloperUser) {
+      setSalesCustomers([]);
+      return;
+    }
+    let cancelled = false;
+    setSalesCustomerSync((current) => ({ ...current, loading: true, message: '' }));
+    apiJson('/api/sales-customers')
+      .then((data) => {
+        if (cancelled) return;
+        setSalesCustomers(sortSalesCustomers(Array.isArray(data.customers) ? data.customers : []));
+        setSalesCustomerSync({ loading: false, saving: false, message: '' });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSalesCustomerSync({ loading: false, saving: false, message: error.message || '客户数据读取失败。' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.authenticated, isGoogleDeveloperUser]);
+
+  useEffect(() => {
+    if (!authState.authenticated || isGoogleDeveloperUser) {
       setPurchaseExpenses([]);
       return;
     }
@@ -1435,6 +1517,8 @@ function App() {
       accountInfoFormatted: '',
       phoneRenewal: createBlankPhoneRenewal({ createdAt: now.toISOString().slice(0, 10) }),
       googleDeveloperAccess: createBlankGoogleDeveloperAccess(),
+      salesCustomerId: '',
+      salesCustomerSnapshot: null,
       updatedAt: now.toLocaleTimeString('zh-CN', { hour12: false })
     };
     nextProduct.id = `draft-${Date.now()}`;
@@ -1479,6 +1563,33 @@ function App() {
       const message = error.message || '保存失败，请稍后重试。';
       setProductSync({ loading: false, saving: false, message });
       return { ok: false, message };
+    }
+  };
+
+  const saveSalesCustomer = async (customer) => {
+    setSalesCustomerSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const isDraft = !customer.id || String(customer.id).startsWith('draft-customer-');
+      const payload = { ...customer };
+      if (isDraft) delete payload.id;
+      const data = await apiJson(isDraft ? '/api/sales-customers' : `/api/sales-customers/${encodeURIComponent(customer.id)}`, {
+        method: isDraft ? 'POST' : 'PUT',
+        body: JSON.stringify(payload)
+      });
+      const savedCustomer = normalizeSalesCustomer(data.customer);
+      setSalesCustomers((current) => {
+        const withoutDraft = current.filter((item) => item.id !== customer.id);
+        const exists = withoutDraft.some((item) => item.id === savedCustomer.id);
+        return sortSalesCustomers(exists
+          ? withoutDraft.map((item) => item.id === savedCustomer.id ? savedCustomer : item)
+          : [savedCustomer, ...withoutDraft]);
+      });
+      setSalesCustomerSync({ loading: false, saving: false, message: '客户已保存。' });
+      return { ok: true, customer: savedCustomer };
+    } catch (error) {
+      const message = error.message || '客户保存失败，请稍后重试。';
+      setSalesCustomerSync({ loading: false, saving: false, message });
+      return { ok: false, message, status: error.status, customer: error.data?.customer ? normalizeSalesCustomer(error.data.customer) : null };
     }
   };
 
@@ -1699,7 +1810,21 @@ function App() {
           );
         })()}
         {!isGoogleDeveloperUser && page === 'account-details' && <AccountDetailsPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} />}
+        {!isGoogleDeveloperUser && page === 'sales-customers' && (
+          <SalesCustomersPage
+            customers={salesCustomers}
+            products={products}
+            loading={salesCustomerSync.loading}
+            saving={salesCustomerSync.saving}
+            onSaveCustomer={saveSalesCustomer}
+            onOpenProduct={(id) => {
+              setActiveId(id);
+              setPage('workbench');
+            }}
+          />
+        )}
         {isSuperAdmin && page === 'phone-renewals' && <PhoneRenewalPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} targetProductId={phoneRenewalTargetId} />}
+        {salesCustomerSync.message && <div className="global-notice"><Info size={15} />{salesCustomerSync.message}</div>}
         {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'purchase-expenses' && (
           <PurchaseExpensesPage
@@ -1713,7 +1838,7 @@ function App() {
         )}
         {purchaseExpenseSync.message && <div className="global-notice"><Info size={15} />{purchaseExpenseSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'workbench' && activeProduct && (
-          <Workbench product={activeProduct} user={currentUser} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={isSuperAdmin ? openPhoneRenewals : undefined} saving={productSync.saving} onAuthExpired={handleAuthExpired} />
+          <Workbench product={activeProduct} user={currentUser} customers={salesCustomers} onSaveCustomer={saveSalesCustomer} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={isSuperAdmin ? openPhoneRenewals : undefined} saving={productSync.saving || salesCustomerSync.saving} onAuthExpired={handleAuthExpired} />
         )}
         {isSuperAdmin && page === 'push-settings' && (
           <PushSettingsPage
@@ -1845,6 +1970,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount, products = [], ac
     { id: 'dashboard', label: '首页', icon: Home },
     ...businessTypes.map((item) => ({ id: item.navId, label: item.label, icon: ClipboardList })),
     { id: 'account-details', label: '账号详情', icon: UserRound },
+    { id: 'sales-customers', label: '客户管理', icon: UserRound },
     ...(isSuperAdmin ? [{ id: 'phone-renewals', label: '手机号续费', icon: MessageSquareText }] : []),
     { id: 'purchase-expenses', label: '代采购费用', icon: ReceiptText },
     ...(isSuperAdmin ? [{ id: 'push-settings', label: '推送设置', icon: Send }] : []),
@@ -2826,6 +2952,134 @@ function AccountDetailsPage({ products, onSaveProduct, saving }) {
   );
 }
 
+function SalesCustomersPage({ customers, products, loading, saving, onSaveCustomer, onOpenProduct }) {
+  const [keyword, setKeyword] = useState('');
+  const [showDisabled, setShowDisabled] = useState(false);
+  const [activeId, setActiveId] = useState(customers[0]?.id || '');
+  const [draft, setDraft] = useState({ id: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+  const [notice, setNotice] = useState('');
+  const visibleCustomers = filterSalesCustomers(customers, keyword, { includeDisabled: showDisabled, limit: 200 });
+  const activeCustomer = customers.find((item) => item.id === activeId) || visibleCustomers[0] || null;
+  const activeHistory = activeCustomer
+    ? products.filter((product) => String(product.salesCustomerId) === String(activeCustomer.id) && product.isSold)
+    : [];
+
+  useEffect(() => {
+    if (!customers.length) {
+      setActiveId('');
+      return;
+    }
+    setActiveId((current) => customers.some((item) => item.id === current) ? current : customers[0].id);
+  }, [customers]);
+
+  useEffect(() => {
+    if (activeCustomer) {
+      setDraft(activeCustomer);
+    } else {
+      setDraft({ id: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+    }
+    setNotice('');
+  }, [activeCustomer?.id]);
+
+  const startNew = () => {
+    setActiveId('');
+    setDraft({ id: `draft-customer-${Date.now()}`, zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+    setNotice('');
+  };
+
+  const saveDraft = async () => {
+    setNotice('');
+    if (!draft.zhanfuUsername.trim() || !draft.zhanfuPhone.trim()) {
+      setNotice('站斧用户名和站斧手机号都必填。');
+      return;
+    }
+    const result = await onSaveCustomer(draft);
+    if (!result.ok) {
+      setNotice(result.message || '客户保存失败。');
+      return;
+    }
+    setActiveId(result.customer.id);
+    setNotice('客户已保存。');
+  };
+
+  const toggleStatus = () => {
+    setDraft((current) => ({ ...current, status: current.status === 'disabled' ? 'active' : 'disabled' }));
+  };
+
+  return (
+    <section className="page customers-page">
+      <div className="page-title">
+        <h1>客户管理</h1>
+        <span>维护站斧客户档案与购买历史</span>
+        <button className="primary-button" type="button" onClick={startNew}><Plus size={16} />新增客户</button>
+      </div>
+      <div className="customers-layout">
+        <Panel title="客户列表" hint={loading ? '正在读取客户数据...' : `共 ${customers.length} 个客户`}>
+          <div className="customer-list-tools">
+            <div className="search-box">
+              <Search size={14} />
+              <input value={keyword} placeholder="搜索站斧用户名 / 手机号" onChange={(event) => setKeyword(event.target.value)} />
+            </div>
+            <label className="checkbox-chip compact">
+              <input type="checkbox" checked={showDisabled} onChange={(event) => setShowDisabled(event.target.checked)} />
+              <span>显示停用</span>
+            </label>
+          </div>
+          <div className="customer-list">
+            {visibleCustomers.map((customer) => (
+              <button key={customer.id} type="button" className={customer.id === activeCustomer?.id ? 'active' : ''} onClick={() => setActiveId(customer.id)}>
+                <strong>{customer.zhanfuUsername}</strong>
+                <span>{customer.zhanfuPhone}</span>
+                <StatusBadge label={customer.status === 'disabled' ? '已停用' : '正常'} />
+              </button>
+            ))}
+            {!visibleCustomers.length && <EmptyState icon={Search} title="没有匹配客户" text="换一个站斧用户名或手机号继续搜索。" />}
+          </div>
+        </Panel>
+        <Panel title={draft.id && !String(draft.id).startsWith('draft-customer-') ? '客户资料' : '新增客户'} hint="站斧用户名和站斧手机号均唯一">
+          <div className="customer-editor">
+            <Input label="站斧用户名" value={draft.zhanfuUsername} onChange={(value) => setDraft({ ...draft, zhanfuUsername: value })} />
+            <Input label="站斧手机号" value={draft.zhanfuPhone} onChange={(value) => setDraft({ ...draft, zhanfuPhone: value })} />
+            <Textarea label="备注" value={draft.remark || ''} onChange={(value) => setDraft({ ...draft, remark: value })} />
+            <div className="customer-editor-actions">
+              <button className="primary-button" type="button" disabled={saving} onClick={saveDraft}><Save size={16} />{saving ? '保存中...' : '保存客户'}</button>
+              <button className="secondary-button" type="button" disabled={!draft.id || String(draft.id).startsWith('draft-customer-')} onClick={toggleStatus}>
+                {draft.status === 'disabled' ? '启用客户' : '停用客户'}
+              </button>
+            </div>
+            {notice && <div className="inline-notice"><Info size={15} />{notice}</div>}
+          </div>
+          <div className="customer-history-head">
+            <strong>购买历史</strong>
+            <span>{activeHistory.length} 条已售记录</span>
+          </div>
+          <div className="table-wrap">
+            <table className="product-table customer-history-table">
+              <thead>
+                <tr><th>ID</th><th>销售时间</th><th>账号</th><th>售价</th><th>回款</th><th>结算</th><th>操作</th></tr>
+              </thead>
+              <tbody>
+                {activeHistory.map((product) => (
+                  <tr key={product.id}>
+                    <td>{product.id}</td>
+                    <td>{String(product.saleTime || '').slice(0, 16) || '-'}</td>
+                    <td><CopyableAccountCell value={product.account || product.email} /></td>
+                    <td>{money(product.salePrice)}</td>
+                    <td><StatusBadge label={product.isPaid ? '已回款' : '未回款'} /></td>
+                    <td><StatusBadge label={product.settlementStatus === 'settled' ? '已结算' : '未结算'} /></td>
+                    <td className="actions"><button type="button" onClick={() => onOpenProduct(product.id)}>打开</button></td>
+                  </tr>
+                ))}
+                {!activeHistory.length && <tr><td colSpan={7}>暂无购买历史</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
 function PhoneRenewalPage({ products, onSaveProduct, saving, targetProductId }) {
   const [keyword, setKeyword] = useState('');
   const [businessFilter, setBusinessFilter] = useState('全部');
@@ -3065,7 +3319,89 @@ function EmptyState({ icon: Icon, title, text }) {
   );
 }
 
-function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, saving, onAuthExpired }) {
+function SalesCustomerPicker({ product, customers = [], onSelect, onCreate }) {
+  const selected = salesCustomerSnapshot(product, customers);
+  const hasSelected = Boolean(product.salesCustomerId && (selected.zhanfuUsername || selected.zhanfuPhone));
+  const [keyword, setKeyword] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState({ zhanfuUsername: '', zhanfuPhone: '' });
+  const [message, setMessage] = useState('');
+  const matches = filterSalesCustomers(customers, keyword, { limit: 10 });
+
+  const createCustomer = async () => {
+    setMessage('');
+    const zhanfuUsername = draft.zhanfuUsername.trim() || keyword.trim();
+    const zhanfuPhone = draft.zhanfuPhone.trim();
+    if (!zhanfuUsername || !zhanfuPhone) {
+      setMessage('站斧用户名和站斧手机号都必填。');
+      return;
+    }
+    const result = await onCreate?.({ zhanfuUsername, zhanfuPhone, status: 'active' });
+    if (!result?.ok) {
+      if (result?.customer?.id) {
+        onSelect?.(result.customer);
+        setKeyword('');
+        setDraft({ zhanfuUsername: '', zhanfuPhone: '' });
+        setCreating(false);
+      }
+      setMessage(result?.message || '客户创建失败。');
+      return;
+    }
+    onSelect?.(result.customer);
+    setKeyword('');
+    setDraft({ zhanfuUsername: '', zhanfuPhone: '' });
+    setCreating(false);
+  };
+
+  return (
+    <div className="sales-customer-picker">
+      <div className="customer-picker-label">销售对象</div>
+      {hasSelected ? (
+        <div className="selected-customer">
+          <div>
+            <strong>{selected.zhanfuUsername}</strong>
+            <span>{selected.zhanfuPhone}</span>
+          </div>
+          <button type="button" onClick={() => onSelect?.({ id: '', zhanfuUsername: '', zhanfuPhone: '' })}>更换</button>
+        </div>
+      ) : (
+        <div className="customer-search-box">
+          <div className="search-box">
+            <Search size={14} />
+            <input value={keyword} placeholder="搜索站斧用户名 / 站斧手机号" onChange={(event) => setKeyword(event.target.value)} />
+          </div>
+          <div className="customer-suggestions">
+            {matches.map((customer) => (
+              <button key={customer.id} type="button" onClick={() => onSelect?.(customer)}>
+                <strong>{customer.zhanfuUsername}</strong>
+                <span>{customer.zhanfuPhone}</span>
+              </button>
+            ))}
+            {keyword && matches.length === 0 && <div className="suggestion-empty">没有匹配客户</div>}
+          </div>
+          {!creating ? (
+            <button className="link-button customer-create-toggle" type="button" onClick={() => {
+              setDraft({ zhanfuUsername: keyword.trim(), zhanfuPhone: '' });
+              setCreating(true);
+            }}>
+              <Plus size={14} />新建销售对象
+            </button>
+          ) : (
+            <div className="customer-create-inline">
+              <input value={draft.zhanfuUsername} placeholder="站斧用户名" onChange={(event) => setDraft({ ...draft, zhanfuUsername: event.target.value })} />
+              <input value={draft.zhanfuPhone} placeholder="站斧手机号" onChange={(event) => setDraft({ ...draft, zhanfuPhone: event.target.value })} />
+              <button type="button" onClick={createCustomer}>创建</button>
+              <button type="button" onClick={() => setCreating(false)}>取消</button>
+            </div>
+          )}
+          {message && <div className="field-note customer-picker-note">{message}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSettle, onOpenPhoneRenewals, saving, onAuthExpired }) {
   const [draft, setDraft] = useState(product);
   const [dirty, setDirty] = useState(false);
   const [visible, setVisible] = useState({});
@@ -3250,6 +3586,10 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
     if (checked && settlement.totalCost <= 0) {
       setNotice('请先填写成本后再标记售出，避免利润和分成被误算。');
       setSettlementNotice('请先填写成本后再进入结算。');
+      return;
+    }
+    if (checked && !draft.salesCustomerId) {
+      setNotice('请先选择或新建销售对象，再标记售出。');
       return;
     }
     setSettlementNotice('');
@@ -3530,6 +3870,10 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
   };
   const saveDraft = async () => {
     setNotice('');
+    if (draft.isSold && !draft.salesCustomerId && (!product.isSold || product.salesCustomerId)) {
+      setNotice('请先选择或新建销售对象，再保存销售登记。');
+      return;
+    }
     const result = await onSave(draft);
     if (!result.ok) {
       setNotice(result.message || '保存失败，请稍后重试。');
@@ -3694,6 +4038,20 @@ function Workbench({ product, user, onSave, onSettle, onOpenPhoneRenewals, savin
 
           <Section title="销售登记" icon={LineChart} subtitle="登记销售信息与收款">
             <div className="sale-grid">
+              <SalesCustomerPicker
+                product={draft}
+                customers={customers}
+                onSelect={(customer) => commitChange({
+                  salesCustomerId: customer.id,
+                  salesCustomerSnapshot: {
+                    id: customer.id,
+                    zhanfuUsername: customer.zhanfuUsername,
+                    zhanfuPhone: customer.zhanfuPhone,
+                    capturedAt: new Date().toISOString()
+                  }
+                })}
+                onCreate={onSaveCustomer}
+              />
               <Input label="售价（USD）" type="number" value={draft.salePrice} onChange={(value) => updateField('salePrice', Number(value))} />
               <Input label="销售时间" type="datetime-local" value={toDateTimeInputValue(draft.saleTime)} onChange={(value) => updateField('saleTime', fromDateTimeInputValue(value))} />
               <Toggle label="是否售出" checked={draft.isSold} onChange={updateSaleStatus} />
