@@ -57,6 +57,15 @@ import {
   YAxis
 } from 'recharts';
 import './styles.css';
+import {
+  LOSS_EVENT_LABELS,
+  LOSS_EVENT_TYPES,
+  LOSS_RECOVERY_OWNERS,
+  LOSS_SHARING_LABELS,
+  LOSS_SHARING_RULES,
+  calculateLossSettlement,
+  lossSettlementDirection
+} from './loss-ledger.js';
 
 const defaultExchangeRate = 6.84;
 const exchangeRateSource = 'Frankfurter';
@@ -89,12 +98,16 @@ const defaultBusinessType = businessTypes[0].id;
 const availabilityStatuses = {
   preparing: 'preparing',
   available: 'available',
-  paused: 'paused'
+  paused: 'paused',
+  compensated: 'compensated',
+  damaged: 'damaged'
 };
 const availabilityStatusOptions = [
   { value: availabilityStatuses.preparing, label: '准备中' },
   { value: availabilityStatuses.available, label: '可出售' },
-  { value: availabilityStatuses.paused, label: '暂停出售' }
+  { value: availabilityStatuses.paused, label: '暂停出售' },
+  { value: availabilityStatuses.compensated, label: '售后补偿' },
+  { value: availabilityStatuses.damaged, label: '已损坏' }
 ];
 const costOwners = {
   hongKong: 'hongKong',
@@ -329,6 +342,9 @@ function createBlankProduct(productType = defaultBusinessType) {
     settlementWuhanRetainedUsd: null,
     settlementHongKongReceivableCny: null,
     settlementWuhanRetainedCny: null,
+    dispositionType: '',
+    relatedOriginalProductId: '',
+    lossEventId: '',
     accountType: isGoogleDeveloperProduct ? googleDeveloperDefaults.accountType : '',
     accountCreationDate: '',
     accountCountry: isGoogleDeveloperProduct ? googleDeveloperDefaults.accountCountry : '',
@@ -570,7 +586,7 @@ function shortDate(dateText) {
   return String(dateText || '').slice(5, 10);
 }
 
-function buildDailyTrend(products, days = 7) {
+function buildDailyTrend(products, days = 7, lossEvents = []) {
   const today = new Date();
   const rows = Array.from({ length: days }, (_, index) => {
     const date = new Date(today);
@@ -587,10 +603,16 @@ function buildDailyTrend(products, days = 7) {
     row.sales += Number(product.salePrice || 0);
     row.profit += productProfit(product);
   });
+  lossEvents.forEach((event) => {
+    const key = String(event.eventDate || event.createdAt || '').slice(0, 10);
+    const row = byDate.get(key);
+    if (!row) return;
+    row.profit -= Number(event.netLossUsd || 0);
+  });
   return rows;
 }
 
-function buildMonthlyBars(products) {
+function buildMonthlyBars(products, lossEvents = []) {
   const byMonth = new Map();
   products.forEach((product) => {
     const key = String(product.saleTime || product.createdAt || '').slice(0, 7);
@@ -599,6 +621,14 @@ function buildMonthlyBars(products) {
     const current = byMonth.get(key) || { month: label, cost: 0, profit: 0 };
     current.cost += sumCosts(product);
     if (product.isSold) current.profit += productProfit(product);
+    byMonth.set(key, current);
+  });
+  lossEvents.forEach((event) => {
+    const key = String(event.eventDate || event.createdAt || '').slice(0, 7);
+    if (!key) return;
+    const label = `${Number(key.slice(5, 7))}月`;
+    const current = byMonth.get(key) || { month: label, cost: 0, profit: 0 };
+    current.profit -= Number(event.netLossUsd || 0);
     byMonth.set(key, current);
   });
   return [...byMonth.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, row]) => row).slice(-6);
@@ -925,10 +955,10 @@ function downloadCsv(filename, rows) {
 
 function statusClass(status) {
   if (['已售', '已回款', '已结算'].includes(status)) return 'success';
-  if (['待回款', '未回款', '未结算', '已过期', '不再续费'].includes(status)) return 'danger';
+  if (['待回款', '未回款', '未结算', '已过期', '不再续费', '已损坏'].includes(status)) return 'danger';
   if (['待售', '待补成本', '可出售'].includes(status)) return 'primary';
   if (['正常'].includes(status)) return 'success';
-  if (['待续费', '临近上限', '准备中'].includes(status)) return 'warning';
+  if (['待续费', '临近上限', '准备中', '售后补偿'].includes(status)) return 'warning';
   if (['暂停出售'].includes(status)) return 'muted';
   return 'warning';
 }
@@ -1235,12 +1265,14 @@ function App() {
   const [products, setProducts] = useState(initialProducts);
   const [salesCustomers, setSalesCustomers] = useState([]);
   const [purchaseExpenses, setPurchaseExpenses] = useState([]);
+  const [lossEvents, setLossEvents] = useState([]);
   const [activeId, setActiveId] = useState(initialProducts[0]?.id || 1);
   const [phoneRenewalTargetId, setPhoneRenewalTargetId] = useState(null);
   const [draftProduct, setDraftProduct] = useState(null);
   const [productSync, setProductSync] = useState({ loading: false, saving: false, message: '' });
   const [salesCustomerSync, setSalesCustomerSync] = useState({ loading: false, saving: false, message: '' });
   const [purchaseExpenseSync, setPurchaseExpenseSync] = useState({ loading: false, saving: false, message: '' });
+  const [lossEventSync, setLossEventSync] = useState({ loading: false, saving: false, message: '' });
   const [pushTemplates, setPushTemplates] = useState(readStoredPushTemplates);
   const [telegramTargets, setTelegramTargets] = useState([]);
   const [telegramTargetSync, setTelegramTargetSync] = useState({ loading: false, message: '' });
@@ -1454,6 +1486,28 @@ function App() {
   }, [authState.authenticated, isGoogleDeveloperUser]);
 
   useEffect(() => {
+    if (!authState.authenticated || isGoogleDeveloperUser) {
+      setLossEvents([]);
+      return;
+    }
+    let cancelled = false;
+    setLossEventSync((current) => ({ ...current, loading: true, message: '' }));
+    apiJson('/api/loss-events')
+      .then((data) => {
+        if (cancelled) return;
+        setLossEvents(Array.isArray(data.events) ? data.events : []);
+        setLossEventSync({ loading: false, saving: false, message: '' });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setLossEventSync({ loading: false, saving: false, message: error.message || '异常记录读取失败。' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.authenticated, isGoogleDeveloperUser]);
+
+  useEffect(() => {
     if (!authState.authenticated || isGoogleDeveloperUser) return;
     let cancelled = false;
     apiJson('/api/exchange-rate')
@@ -1510,6 +1564,9 @@ function App() {
       settlementWuhanRetainedUsd: null,
       settlementHongKongReceivableCny: null,
       settlementWuhanRetainedCny: null,
+      dispositionType: '',
+      relatedOriginalProductId: '',
+      lossEventId: '',
       accountType: isGoogleDeveloperProduct ? googleDeveloperDefaults.accountType : '',
       accountCreationDate: '',
       accountCountry: isGoogleDeveloperProduct ? googleDeveloperDefaults.accountCountry : '',
@@ -1692,6 +1749,43 @@ function App() {
     }
   };
 
+  const saveLossEvent = async (payload) => {
+    setLossEventSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const data = await apiJson('/api/loss-events', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setLossEvents((current) => [data.event, ...current.map((item) => item.id === data.referenceEvent?.id ? data.referenceEvent : item)]);
+      if (data.product) {
+        setProducts((current) => sortProductsByIdDesc(current.map((item) => item.id === data.product.id ? data.product : item)));
+      }
+      setLossEventSync({ loading: false, saving: false, message: '异常记录已保存，原销售结算未改动。' });
+      return { ok: true, event: data.event };
+    } catch (error) {
+      const message = error.message || '异常记录保存失败，请稍后重试。';
+      setLossEventSync({ loading: false, saving: false, message });
+      return { ok: false, message };
+    }
+  };
+
+  const settleLossEvent = async (event) => {
+    setLossEventSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const data = await apiJson(`/api/loss-events/${encodeURIComponent(event.id)}/settle`, {
+        method: 'POST',
+        body: JSON.stringify({ exchangeRate })
+      });
+      setLossEvents((current) => current.map((item) => item.id === data.event.id ? data.event : item));
+      setLossEventSync({ loading: false, saving: false, message: '异常结算已按当前汇率锁定。' });
+      return { ok: true, event: data.event };
+    } catch (error) {
+      const message = error.message || '异常结算失败，请稍后重试。';
+      setLossEventSync({ loading: false, saving: false, message });
+      return { ok: false, message };
+    }
+  };
+
   const handleLogin = async (username, password) => {
     try {
       const response = await fetch('/api/auth/login', {
@@ -1788,7 +1882,7 @@ function App() {
             onSave={saveGoogleDeveloperProduct}
           />
         )}
-        {!isGoogleDeveloperUser && page === 'dashboard' && <Dashboard products={products} exchangeRate={exchangeRate} onOpenProducts={() => setPage(businessTypes[0].navId)} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
+        {!isGoogleDeveloperUser && page === 'dashboard' && <Dashboard products={products} lossEvents={lossEvents} exchangeRate={exchangeRate} onOpenProducts={() => setPage(businessTypes[0].navId)} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
         {!isGoogleDeveloperUser && businessTypes.some((item) => item.navId === page) && (() => {
           const productType = businessTypeFromPage(page);
           const visibleProducts = products.filter((item) => productBusinessType(item) === productType);
@@ -1826,6 +1920,18 @@ function App() {
         {isSuperAdmin && page === 'phone-renewals' && <PhoneRenewalPage products={products} onSaveProduct={saveProduct} saving={productSync.saving} targetProductId={phoneRenewalTargetId} />}
         {salesCustomerSync.message && <div className="global-notice"><Info size={15} />{salesCustomerSync.message}</div>}
         {productSync.message && <div className="global-notice"><Info size={15} />{productSync.message}</div>}
+        {!isGoogleDeveloperUser && page === 'loss-events' && (
+          <LossEventsPage
+            products={products}
+            events={lossEvents}
+            exchangeRate={exchangeRate}
+            loading={lossEventSync.loading}
+            saving={lossEventSync.saving}
+            onSaveEvent={saveLossEvent}
+            onSettleEvent={settleLossEvent}
+          />
+        )}
+        {lossEventSync.message && <div className="global-notice"><Info size={15} />{lossEventSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'purchase-expenses' && (
           <PurchaseExpensesPage
             expenses={purchaseExpenses}
@@ -1972,6 +2078,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount, products = [], ac
     { id: 'account-details', label: '账号详情', icon: UserRound },
     { id: 'sales-customers', label: '客户管理', icon: UserRound },
     ...(isSuperAdmin ? [{ id: 'phone-renewals', label: '手机号续费', icon: MessageSquareText }] : []),
+    { id: 'loss-events', label: '异常处理', icon: AlertTriangle },
     { id: 'purchase-expenses', label: '代采购费用', icon: ReceiptText },
     ...(isSuperAdmin ? [{ id: 'push-settings', label: '推送设置', icon: Send }] : []),
     { id: 'settings', label: '系统设置', icon: Settings }
@@ -2049,7 +2156,7 @@ function Topbar({ user, onLogout, onOpenSettings, pendingLoginCount }) {
   );
 }
 
-function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) {
+function Dashboard({ products, lossEvents = [], exchangeRate, onOpenWorkbench, onOpenProducts }) {
   const [trendRange, setTrendRange] = useState('7d');
   const [customTrendRange, setCustomTrendRange] = useState({ from: '', to: '' });
   const [settlementInfoOpen, setSettlementInfoOpen] = useState(false);
@@ -2057,14 +2164,22 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
   const sold = products.filter((item) => item.isSold).length;
   const paid = products.filter((item) => item.isPaid).length;
   const totalSales = products.filter((item) => item.isSold).reduce((sum, item) => sum + Number(item.salePrice || 0), 0);
-  const totalProfit = products.filter((item) => item.isSold).reduce((sum, item) => sum + productProfit(item), 0);
+  const grossProfit = products.filter((item) => item.isSold).reduce((sum, item) => sum + productProfit(item), 0);
+  const totalLoss = lossEvents.reduce((sum, item) => sum + Number(item.netLossUsd || 0), 0);
+  const totalProfit = grossProfit - totalLoss;
   const pendingPayment = products.filter((item) => item.isSold && !item.isPaid).reduce((sum, item) => sum + Number(item.salePrice || 0), 0);
   const missingCost = products.filter((item) => !item.costs.length || sumCosts(item) === 0).length;
   const availableProducts = products.filter(isAvailableForSale);
   const preparingProducts = products.filter((item) => !item.isSold && productAvailabilityStatus(item) === availabilityStatuses.preparing);
-  const pendingSettlement = products
+  const pendingProductSettlement = products
     .filter((item) => shouldShowPendingSettlement(item))
     .reduce((sum, item) => sum + settlementAmounts(item).hongKongReceivable, 0);
+  const pendingLossSettlement = lossEvents
+    .filter((item) => item.settlementStatus !== 'settled')
+    .reduce((sum, item) => sum + Number(item.hongKongSettlementUsd || 0), 0);
+  const pendingSettlement = pendingProductSettlement + pendingLossSettlement;
+  const pendingSettlementCount = products.filter((item) => shouldShowPendingSettlement(item)).length
+    + lossEvents.filter((item) => item.settlementStatus !== 'settled').length;
 
   const pie = [
     { name: '可出售', value: availableProducts.length, color: '#3f74f6' },
@@ -2076,14 +2191,14 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
     ? pie
     : [{ name: '暂无数据', value: 1, color: '#e4e8f1' }];
   const activeTrend = useMemo(() => {
-    const base = buildDailyTrend(products, trendRange === '30d' || trendRange === 'custom' ? 30 : 7);
+    const base = buildDailyTrend(products, trendRange === '30d' || trendRange === 'custom' ? 30 : 7, lossEvents);
     if (trendRange !== 'custom') return base;
     return base.filter((item) => (
       (!customTrendRange.from || item.fullDate >= customTrendRange.from) &&
       (!customTrendRange.to || item.fullDate <= customTrendRange.to)
     ));
-  }, [products, trendRange, customTrendRange]);
-  const monthlyBars = useMemo(() => buildMonthlyBars(products), [products]);
+  }, [products, lossEvents, trendRange, customTrendRange]);
+  const monthlyBars = useMemo(() => buildMonthlyBars(products, lossEvents), [products, lossEvents]);
   const trendLabel = trendRange === '30d' ? '近 30 天' : trendRange === 'custom' ? '自定义区间' : '近 7 天';
   const trendPeak = activeTrend.length ? Math.max(...activeTrend.map((item) => item.profit)) : 0;
   const trendPeakDate = activeTrend.find((item) => item.profit === trendPeak)?.date;
@@ -2115,10 +2230,10 @@ function Dashboard({ products, exchangeRate, onOpenWorkbench, onOpenProducts }) 
       <div className="kpi-grid six">
         <Kpi icon={WalletCards} label="累计产品" value={`${total} 件`} sub={`可出售 ${availableProducts.length} 件`} tone="purple" />
         <Kpi icon={ShoppingCart} label="累计售出" value={`${sold} 件`} sub={`回款 ${paid} 件`} tone="blue" />
-        <Kpi icon={Coins} label="累计利润" value={money(totalProfit)} sub={`销售额 ${money(totalSales)}`} tone="orange" />
-        <Kpi icon={TrendingUp} label="本月利润" value={money(monthlyBars.at(-1)?.profit || 0)} sub="当前产品数据" tone="green" />
+        <Kpi icon={Coins} label="累计净利润" value={money(totalProfit)} sub={`销售毛利 ${money(grossProfit)} · 异常损失 ${money(totalLoss)}`} tone="orange" />
+        <Kpi icon={TrendingUp} label="本月净利润" value={money(monthlyBars.at(-1)?.profit || 0)} sub="已扣除售后与报损" tone="green" />
         <Kpi icon={Database} label="待回款" value={money(pendingPayment)} sub={`${products.filter((item) => item.isSold && !item.isPaid).length} 笔`} tone="orange" negative />
-        <Kpi icon={CreditCard} label="待结算香港" value={money(pendingSettlement)} subValue={cny(usdToCny(pendingSettlement, exchangeRate))} sub={`${products.filter((item) => shouldShowPendingSettlement(item)).length} 笔`} tone="purple" />
+        <Kpi icon={CreditCard} label={pendingSettlement >= 0 ? '待结算香港' : '香港待结算武汉'} value={money(Math.abs(pendingSettlement))} subValue={cny(Math.abs(usdToCny(pendingSettlement, exchangeRate)))} sub={`${pendingSettlementCount} 笔，含异常结算`} tone="purple" />
       </div>
 
       <div className="dashboard-grid">
@@ -2398,7 +2513,7 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
         <Panel className="list-panel">
           <div className="filters">
             <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索 ID / 账号 / 手机号" /></label>
-            <FilterSelect label="库存状态" value={availabilityFilter} onChange={setAvailabilityFilter} options={['在售列表', '全部', '可出售', '准备中', '暂停出售', '已售']} />
+            <FilterSelect label="库存状态" value={availabilityFilter} onChange={setAvailabilityFilter} options={['在售列表', '全部', '可出售', '准备中', '暂停出售', '售后补偿', '已损坏', '已售']} />
             <FilterSelect label="销售状态" value={saleFilter} onChange={setSaleFilter} options={['全部', '待售', '已售']} />
             <FilterSelect label="回款状态" value={paidFilter} onChange={setPaidFilter} options={['全部', '未回款', '已回款']} />
             <FilterSelect label="结算状态" value={settlementFilter} onChange={setSettlementFilter} options={['全部', '未结算', '已结算']} />
@@ -2812,6 +2927,235 @@ function PurchaseExpensesPage({ expenses, exchangeRate, loading, saving, onSaveE
         </Panel>
       </div>
       {fullView && <FullValueModal label={fullView.label} value={fullView.value} onClose={() => setFullView(null)} />}
+    </section>
+  );
+}
+
+function createLossEventDraft(eventType, referenceEventId = '') {
+  return {
+    eventType,
+    eventDate: localDateInput(),
+    productId: '',
+    originalProductId: '',
+    referenceEventId,
+    recoveredAmountUsd: '',
+    recoveryReceivedBy: LOSS_RECOVERY_OWNERS.WUHAN,
+    sharingRule: LOSS_SHARING_RULES.EQUAL,
+    reason: ''
+  };
+}
+
+function lossProductLabel(product = {}) {
+  return product.account || product.email || `账号 #${product.id || '-'}`;
+}
+
+function LossEventsPage({ products, events, exchangeRate, loading, saving, onSaveEvent, onSettleEvent }) {
+  const [draft, setDraft] = useState(null);
+  const [filter, setFilter] = useState('全部');
+  const [notice, setNotice] = useState('');
+  const soldProducts = products.filter((item) => item.isSold);
+  const availableProducts = products.filter((item) => (
+    !item.isSold
+    && ['available', 'preparing'].includes(productAvailabilityStatus(item))
+    && sumCosts(item) > 0
+  ));
+  const selectedOriginal = soldProducts.find((item) => String(item.id) === String(draft?.originalProductId));
+  const candidateProducts = draft?.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT && selectedOriginal
+    ? availableProducts.filter((item) => productBusinessType(item) === productBusinessType(selectedOriginal))
+    : availableProducts;
+  const selectedProduct = candidateProducts.find((item) => String(item.id) === String(draft?.productId));
+  const selectedReference = events.find((item) => item.id === draft?.referenceEventId);
+  const preview = draft?.eventType === LOSS_EVENT_TYPES.COST_RECOVERY
+    ? calculateLossSettlement({
+      costs: [],
+      recoveredAmountUsd: draft.recoveredAmountUsd,
+      recoveryReceivedBy: draft.recoveryReceivedBy,
+      sharingRule: selectedReference?.sharingRule
+    })
+    : calculateLossSettlement({ costs: selectedProduct?.costs || [], sharingRule: draft?.sharingRule });
+  const direction = lossSettlementDirection(preview.hongKongSettlementUsd);
+  const netLoss = events.reduce((total, item) => total + Number(item.netLossUsd || 0), 0);
+  const pendingSettlement = events
+    .filter((item) => item.settlementStatus !== 'settled')
+    .reduce((total, item) => total + Math.abs(Number(item.hongKongSettlementUsd || 0)), 0);
+  const visibleEvents = events.filter((item) => filter === '全部' || LOSS_EVENT_LABELS[item.eventType] === filter);
+
+  const startDraft = (eventType, referenceEventId = '') => {
+    setNotice('');
+    setDraft(createLossEventDraft(eventType, referenceEventId));
+  };
+
+  const submitDraft = async () => {
+    if (!draft) return;
+    if (draft.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT && !draft.originalProductId) {
+      setNotice('请先选择已经结算过的原销售账号。');
+      return;
+    }
+    if ([LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT, LOSS_EVENT_TYPES.INVENTORY_WRITEOFF].includes(draft.eventType) && !draft.productId) {
+      setNotice('请选择本次补偿或报损的库存账号。');
+      return;
+    }
+    if (draft.eventType === LOSS_EVENT_TYPES.COST_RECOVERY && Number(draft.recoveredAmountUsd || 0) <= 0) {
+      setNotice('请输入大于 0 的追回金额。');
+      return;
+    }
+    const result = await onSaveEvent(draft);
+    if (!result.ok) {
+      setNotice(result.message || '保存失败。');
+      return;
+    }
+    setDraft(null);
+    setNotice('记录已保存，原销售结算没有变化。');
+  };
+
+  const restoreInventory = async (event) => {
+    const confirmed = window.confirm(`确定将「${lossProductLabel(event.productSnapshot)}」恢复为可出售吗？系统会新增一笔等额损失冲回记录。`);
+    if (!confirmed) return;
+    const result = await onSaveEvent({
+      eventType: LOSS_EVENT_TYPES.INVENTORY_RECOVERY,
+      eventDate: localDateInput(),
+      referenceEventId: event.id,
+      recoveryReceivedBy: LOSS_RECOVERY_OWNERS.WUHAN,
+      reason: '账号恢复可售，冲回原库存报损'
+    });
+    setNotice(result.ok ? '账号已恢复可售，并新增损失冲回记录。' : result.message || '恢复失败。');
+  };
+
+  return (
+    <section className="page loss-events-page">
+      <div className="page-title">
+        <h1>异常处理</h1>
+        <span>售后补偿和库存报损独立结算，不修改已完成的原销售</span>
+      </div>
+
+      <div className="kpi-grid four">
+        <Kpi icon={RefreshCw} label="售后补偿" value={`${events.filter((item) => item.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT).length} 笔`} tone="orange" />
+        <Kpi icon={AlertTriangle} label="库存报损" value={`${events.filter((item) => item.eventType === LOSS_EVENT_TYPES.INVENTORY_WRITEOFF).length} 笔`} tone="red" />
+        <Kpi icon={TrendingUp} label="累计净损失" value={money(netLoss)} sub="已扣除追回和恢复" tone="purple" />
+        <Kpi icon={WalletCards} label="待内部结算" value={money(pendingSettlement)} sub="按应补款绝对额统计" tone="blue" />
+      </div>
+
+      <div className="loss-action-bar">
+        <div>
+          <strong>新建处理</strong>
+          <span>直接选择已经录入成本的库存账号</span>
+        </div>
+        <button className="primary-button" type="button" onClick={() => startDraft(LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT)}><RefreshCw size={16} /> 售后补偿</button>
+        <button className="secondary-button" type="button" onClick={() => startDraft(LOSS_EVENT_TYPES.INVENTORY_WRITEOFF)}><AlertTriangle size={16} /> 库存报损</button>
+      </div>
+
+      {draft && (
+        <Panel
+          className="loss-editor-panel"
+          title={LOSS_EVENT_LABELS[draft.eventType] || '异常处理'}
+          hint={draft.eventType === LOSS_EVENT_TYPES.COST_RECOVERY ? `冲减原损失：${selectedReference ? money(selectedReference.netLossUsd) : '-'}` : '确认后账号将立即退出可售库存'}
+        >
+          <div className="loss-editor-grid">
+            {draft.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT && (
+              <label className="input-label wide">
+                <span>原销售账号</span>
+                <select className="plain-select" value={draft.originalProductId} onChange={(event) => setDraft({ ...draft, originalProductId: event.target.value, productId: '' })}>
+                  <option value="">请选择已售账号</option>
+                  {soldProducts.map((product) => (
+                    <option key={product.id} value={product.id}>{lossProductLabel(product)} · {money(product.salePrice)} · {salesCustomerSnapshot(product)?.zhanfuUsername || '未登记客户'}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {[LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT, LOSS_EVENT_TYPES.INVENTORY_WRITEOFF].includes(draft.eventType) && (
+              <label className="input-label wide">
+                <span>{draft.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT ? '补偿库存账号' : '损坏库存账号'}</span>
+                <select className="plain-select" value={draft.productId} onChange={(event) => setDraft({ ...draft, productId: event.target.value })}>
+                  <option value="">请选择库存账号</option>
+                  {candidateProducts.map((product) => (
+                    <option key={product.id} value={product.id}>{lossProductLabel(product)} · {businessTypeConfig(productBusinessType(product)).label} · 成本 {money(sumCosts(product))}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {draft.eventType === LOSS_EVENT_TYPES.COST_RECOVERY && (
+              <>
+                <Input label="追回金额（USD）" type="number" value={draft.recoveredAmountUsd} onChange={(value) => setDraft({ ...draft, recoveredAmountUsd: value })} />
+                <label className="input-label">
+                  <span>款项收到方</span>
+                  <select className="plain-select" value={draft.recoveryReceivedBy} onChange={(event) => setDraft({ ...draft, recoveryReceivedBy: event.target.value })}>
+                    <option value={LOSS_RECOVERY_OWNERS.WUHAN}>武汉收到</option>
+                    <option value={LOSS_RECOVERY_OWNERS.HONG_KONG}>香港收到</option>
+                  </select>
+                </label>
+              </>
+            )}
+            <Input label="发生日期" type="date" value={draft.eventDate} onChange={(value) => setDraft({ ...draft, eventDate: value })} />
+            {draft.eventType !== LOSS_EVENT_TYPES.COST_RECOVERY && (
+              <label className="input-label">
+                <span>损失承担规则</span>
+                <select className="plain-select" value={draft.sharingRule} onChange={(event) => setDraft({ ...draft, sharingRule: event.target.value })}>
+                  {Object.entries(LOSS_SHARING_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </label>
+            )}
+            <label className="input-label wide">
+              <span>原因说明</span>
+              <textarea value={draft.reason} onChange={(event) => setDraft({ ...draft, reason: event.target.value })} placeholder="例如：原账号无法登录，确认免费补偿同类账号" />
+            </label>
+          </div>
+          <div className="loss-preview-strip">
+            <div><span>商品成本</span><strong>{money(preview.productCostUsd)}</strong></div>
+            <div><span>{preview.netLossUsd < 0 ? '损失冲回' : '本次净损失'}</span><strong>{money(Math.abs(preview.netLossUsd))}</strong></div>
+            <div><span>{direction.label}</span><strong>{money(direction.amount)}</strong></div>
+            <div><span>承担规则</span><strong>{LOSS_SHARING_LABELS[draft.eventType === LOSS_EVENT_TYPES.COST_RECOVERY ? selectedReference?.sharingRule : draft.sharingRule] || '-'}</strong></div>
+          </div>
+          {notice && <div className="settings-message">{notice}</div>}
+          <div className="loss-editor-actions">
+            <button className="secondary-button" type="button" onClick={() => setDraft(null)}>取消</button>
+            <button className="primary-button" type="button" disabled={saving} onClick={submitDraft}><Save size={16} />{saving ? '保存中...' : '确认记录'}</button>
+          </div>
+        </Panel>
+      )}
+
+      <Panel
+        className="loss-list-panel"
+        title="异常账本"
+        hint={loading ? '正在读取记录...' : `共 ${events.length} 笔，已结算记录保持只读`}
+        action={<FilterSelect label="类型" value={filter} onChange={setFilter} options={['全部', ...Object.values(LOSS_EVENT_LABELS)]} />}
+      >
+        {!visibleEvents.length ? (
+          <EmptyState icon={AlertTriangle} title="暂无异常记录" text="售后补偿或库存报损后，记录会出现在这里。" />
+        ) : (
+          <div className="loss-table-wrap">
+            <table className="product-table loss-table">
+              <thead><tr><th>日期</th><th>类型</th><th>处理账号</th><th>关联原销售</th><th>成本/追回</th><th>净损失</th><th>内部补款</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody>
+                {visibleEvents.map((event) => {
+                  const eventDirection = lossSettlementDirection(event.hongKongSettlementUsd);
+                  const canRecover = [LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT, LOSS_EVENT_TYPES.INVENTORY_WRITEOFF].includes(event.eventType) && event.recoveryStatus !== 'recovered' && Number(event.netLossUsd || 0) > 0;
+                  return (
+                    <tr key={event.id}>
+                      <td>{event.eventDate || '-'}</td>
+                      <td><StatusBadge label={LOSS_EVENT_LABELS[event.eventType] || event.eventType} /></td>
+                      <td><strong>{lossProductLabel(event.productSnapshot)}</strong><small>{businessTypeConfig(event.productType).shortLabel}</small></td>
+                      <td>{event.originalProductSnapshot ? lossProductLabel(event.originalProductSnapshot) : event.referenceEventId ? `损失记录 ${event.referenceEventId.slice(0, 8)}` : '-'}</td>
+                      <td>{Number(event.productCostUsd || 0) > 0 ? money(event.productCostUsd) : `追回 ${money(event.recoveredAmountUsd)}`}</td>
+                      <td className={Number(event.netLossUsd || 0) < 0 ? 'positive-value' : 'negative-value'}>{money(event.netLossUsd)}</td>
+                      <td>{eventDirection.label}<small>{money(eventDirection.amount)}</small></td>
+                      <td><StatusBadge label={event.settlementStatus === 'settled' ? '已结算' : '未结算'} /></td>
+                      <td>
+                        <div className="loss-row-actions">
+                          {event.settlementStatus !== 'settled' && <button type="button" onClick={() => onSettleEvent(event)}>结算</button>}
+                          {canRecover && <button type="button" onClick={() => startDraft(LOSS_EVENT_TYPES.COST_RECOVERY, event.id)}>登记追回</button>}
+                          {event.eventType === LOSS_EVENT_TYPES.INVENTORY_WRITEOFF && event.recoveryStatus === 'none' && <button type="button" onClick={() => restoreInventory(event)}>恢复可售</button>}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {notice && !draft && <div className="settings-message">{notice}</div>}
+        <div className="support-note"><Info size={15} /> 异常结算只记录新发生的损失或追回，不会打开或改写原销售结算；结算汇率为当前 {exchangeRate.toFixed(4)}。</div>
+      </Panel>
     </section>
   );
 }
@@ -3420,6 +3764,7 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
   const isNewProduct = String(draft.id).startsWith('draft-');
   const business = businessTypeConfig(productBusinessType(draft));
   const isAppleDeveloper = business.id === 'appleDeveloper';
+  const isLossManagedProduct = [availabilityStatuses.compensated, availabilityStatuses.damaged].includes(productAvailabilityStatus(draft));
   const showGoogleDeveloperAccessPanel = false;
   const googleDeveloperAccess = normalizeGoogleDeveloperAccess(draft);
 
@@ -3909,10 +4254,11 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
               <label className="input-label">
                 <span>库存状态</span>
                 <div className="input-shell">
-                  <select value={productAvailabilityStatus(draft)} onChange={(event) => updateField('availabilityStatus', event.target.value)}>
+                  <select disabled={isLossManagedProduct} value={productAvailabilityStatus(draft)} onChange={(event) => updateField('availabilityStatus', event.target.value)}>
                     {availabilityStatusOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
                 </div>
+                {isLossManagedProduct && <em>请在“异常处理”中变更</em>}
               </label>
               <Input label="账号" value={draft.account} copyable onOpenFull={openFullValue} onChange={(value) => updateField('account', value)} />
               <SecretInput readOnly={!canEditCredentials} label="密码" value={draft.password} visible={visible.password} onToggle={() => setVisible({ ...visible, password: !visible.password })} onChange={(value) => updateField('password', value)} onOpenFull={openFullValue} />

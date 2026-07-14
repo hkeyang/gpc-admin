@@ -1,3 +1,11 @@
+import {
+  LOSS_EVENT_TYPES,
+  calculateLossSettlement,
+  normalizeLossRecoveryOwner,
+  normalizeLossSharingRule,
+  reverseLossSettlement
+} from '../src/loss-ledger.js';
+
 const SESSION_COOKIE = 'gpc_session';
 const SESSION_MAX_AGE = 60 * 60 * 12;
 const VERIFIER_TOKEN_MAX_AGE = 60 * 60 * 24 * 365;
@@ -210,6 +218,30 @@ export class AuthStore {
 
     if (url.pathname === '/purchase-expenses' && request.method === 'GET') {
       return json({ expenses: await this.listPurchaseExpenses() });
+    }
+
+    if (url.pathname === '/loss-events' && request.method === 'GET') {
+      return json({ events: await this.listLossEvents() });
+    }
+
+    if (url.pathname === '/loss-events' && request.method === 'POST') {
+      const body = await readJson(request);
+      try {
+        return json(await this.createLossEvent(body), 201);
+      } catch (error) {
+        return json({ message: error.message || '异常记录保存失败' }, 400);
+      }
+    }
+
+    const lossEventSettleMatch = url.pathname.match(/^\/loss-events\/([^/]+)\/settle$/);
+    if (lossEventSettleMatch && request.method === 'POST') {
+      const id = decodeURIComponent(lossEventSettleMatch[1]);
+      const body = await readJson(request);
+      try {
+        return json({ event: await this.settleLossEvent(id, body) });
+      } catch (error) {
+        return json({ message: error.message || '异常结算失败' }, 400);
+      }
     }
 
     if (url.pathname === '/telegram-targets' && request.method === 'GET') {
@@ -603,6 +635,17 @@ export class AuthStore {
 
   async saveProduct(input, fixedId) {
     const id = fixedId ?? input.id ?? await this.nextProductId();
+    const existing = fixedId !== undefined && fixedId !== null
+      ? await this.state.storage.get(`product:${normalizeProductId(fixedId)}`)
+      : null;
+    if (existing) {
+      const managedStatuses = new Set(['compensated', 'damaged']);
+      const previousStatus = normalizeAvailabilityStatus(existing.availabilityStatus);
+      const nextStatus = normalizeAvailabilityStatus(input.availabilityStatus);
+      if (previousStatus !== nextStatus && (managedStatuses.has(previousStatus) || managedStatuses.has(nextStatus))) {
+        throw new Error('售后补偿和已损坏状态只能在“异常处理”中变更。');
+      }
+    }
     const product = await this.sanitizeProductForSave(input, id);
     await this.state.storage.put(`product:${product.id}`, product);
     return product;
@@ -988,6 +1031,196 @@ export class AuthStore {
     });
   }
 
+  async listLossEvents() {
+    const entries = await this.state.storage.list({ prefix: 'loss_event:' });
+    return [...entries.values()].sort((a, b) => {
+      const dateCompare = String(b.eventDate || b.createdAt || '').localeCompare(String(a.eventDate || a.createdAt || ''));
+      return dateCompare || String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    });
+  }
+
+  async createLossEvent(input = {}) {
+    const eventType = normalizeLossEventType(input.eventType);
+    if (!eventType) throw new Error('异常类型不正确。');
+    if ([LOSS_EVENT_TYPES.COST_RECOVERY, LOSS_EVENT_TYPES.INVENTORY_RECOVERY].includes(eventType)) {
+      return this.createRecoveryEvent(input, eventType);
+    }
+
+    const productId = normalizeProductId(input.productId);
+    const product = await this.state.storage.get(`product:${productId}`);
+    if (!product) throw new Error('处理账号不存在。');
+    if (product.isSold) throw new Error('已正常售出的账号不能再次作为补偿或报损账号。');
+    const availability = normalizeAvailabilityStatus(product.availabilityStatus);
+    if (!['preparing', 'available'].includes(availability)) throw new Error('该账号当前状态不能进行异常处理。');
+
+    let originalProduct = null;
+    if (eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT) {
+      const originalProductId = normalizeProductId(input.originalProductId);
+      originalProduct = await this.state.storage.get(`product:${originalProductId}`);
+      if (!originalProduct?.isSold) throw new Error('请选择一条已经售出的原账号。');
+      if (normalizeProductType(originalProduct.productType) !== normalizeProductType(product.productType)) {
+        throw new Error('补偿账号必须与原销售账号属于同一商品类型。');
+      }
+    }
+
+    const costsSnapshot = lossCostsSnapshot(product.costs);
+    const calculated = calculateLossSettlement({
+      costs: costsSnapshot,
+      recoveredAmountUsd: input.recoveredAmountUsd,
+      recoveryReceivedBy: input.recoveryReceivedBy,
+      sharingRule: input.sharingRule
+    });
+    if (calculated.productCostUsd <= 0) throw new Error('该账号尚未录入成本，不能确认损失。');
+
+    const now = new Date();
+    const event = {
+      id: crypto.randomUUID(),
+      eventType,
+      eventDate: cleanDate(input.eventDate) || now.toISOString().slice(0, 10),
+      productId: product.id,
+      productType: normalizeProductType(product.productType),
+      productSnapshot: lossProductSnapshot(product),
+      originalProductId: originalProduct?.id || '',
+      originalProductSnapshot: originalProduct ? lossProductSnapshot(originalProduct) : null,
+      salesCustomerId: originalProduct?.salesCustomerId || '',
+      salesCustomerSnapshot: originalProduct?.salesCustomerSnapshot || null,
+      referenceEventId: '',
+      reason: String(input.reason || '').slice(0, 500),
+      sharingRule: normalizeLossSharingRule(input.sharingRule),
+      recoveryReceivedBy: normalizeLossRecoveryOwner(input.recoveryReceivedBy),
+      costsSnapshot,
+      ...calculated,
+      settlementStatus: 'unsettled',
+      settlementExchangeRate: null,
+      settlementAmountCny: null,
+      settledAt: '',
+      recoveryStatus: 'none',
+      createdBy: cleanLine(input.createdBy).slice(0, 80),
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+
+    const nextProduct = sanitizeProduct({
+      ...product,
+      availabilityStatus: eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT ? 'compensated' : 'damaged',
+      dispositionType: eventType,
+      relatedOriginalProductId: originalProduct?.id || '',
+      lossEventId: event.id,
+      salesCustomerId: originalProduct?.salesCustomerId || product.salesCustomerId,
+      salesCustomerSnapshot: originalProduct?.salesCustomerSnapshot || product.salesCustomerSnapshot
+    }, product.id);
+
+    await this.state.storage.transaction(async (transaction) => {
+      await transaction.put(`loss_event:${event.id}`, event);
+      await transaction.put(`product:${nextProduct.id}`, nextProduct);
+    });
+    return { event, product: nextProduct };
+  }
+
+  async createRecoveryEvent(input, eventType) {
+    const referenceEventId = cleanLine(input.referenceEventId);
+    const reference = await this.state.storage.get(`loss_event:${referenceEventId}`);
+    if (!reference || ![LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT, LOSS_EVENT_TYPES.INVENTORY_WRITEOFF].includes(reference.eventType)) {
+      throw new Error('原损失记录不存在。');
+    }
+
+    const existingRecoveries = (await this.listLossEvents()).filter((item) => item.referenceEventId === reference.id);
+    const recoveredAlready = existingRecoveries.reduce((total, item) => total + Number(item.recoveredAmountUsd || 0), 0);
+    let recoveredAmountUsd = Number(input.recoveredAmountUsd || 0);
+    let product = null;
+    let nextProduct = null;
+
+    if (eventType === LOSS_EVENT_TYPES.INVENTORY_RECOVERY) {
+      if (reference.eventType !== LOSS_EVENT_TYPES.INVENTORY_WRITEOFF) throw new Error('只有库存报损账号可以恢复可售。');
+      if (existingRecoveries.length || reference.recoveryStatus === 'recovered') throw new Error('该报损账号已经登记过追回或恢复。');
+      if (Number(reference.recoveredAmountUsd || 0) > 0) throw new Error('该报损已包含追回金额，不能直接恢复全部库存。');
+      product = await this.state.storage.get(`product:${reference.productId}`);
+      if (!product || normalizeAvailabilityStatus(product.availabilityStatus) !== 'damaged') throw new Error('该账号当前不是已损坏状态。');
+      recoveredAmountUsd = Number(reference.productCostUsd || 0);
+      nextProduct = sanitizeProduct({
+        ...product,
+        availabilityStatus: 'available',
+        dispositionType: '',
+        relatedOriginalProductId: '',
+        lossEventId: ''
+      }, product.id);
+    } else {
+      if (!Number.isFinite(recoveredAmountUsd) || recoveredAmountUsd <= 0) throw new Error('请输入大于 0 的追回金额。');
+      const remainingLoss = Math.max(0, Number(reference.netLossUsd || 0) - recoveredAlready);
+      if (recoveredAmountUsd > remainingLoss) throw new Error(`追回金额不能超过剩余损失 ${remainingLoss.toFixed(2)} USD。`);
+    }
+
+    const now = new Date();
+    const calculated = eventType === LOSS_EVENT_TYPES.INVENTORY_RECOVERY
+      ? reverseLossSettlement(reference)
+      : calculateLossSettlement({
+        costs: [],
+        recoveredAmountUsd,
+        recoveryReceivedBy: input.recoveryReceivedBy,
+        sharingRule: reference.sharingRule
+      });
+    const event = {
+      id: crypto.randomUUID(),
+      eventType,
+      eventDate: cleanDate(input.eventDate) || now.toISOString().slice(0, 10),
+      productId: reference.productId,
+      productType: reference.productType,
+      productSnapshot: reference.productSnapshot,
+      originalProductId: reference.originalProductId || '',
+      originalProductSnapshot: reference.originalProductSnapshot || null,
+      salesCustomerId: reference.salesCustomerId || '',
+      salesCustomerSnapshot: reference.salesCustomerSnapshot || null,
+      referenceEventId: reference.id,
+      reason: String(input.reason || (eventType === LOSS_EVENT_TYPES.INVENTORY_RECOVERY ? '账号恢复可售' : '登记损失追回')).slice(0, 500),
+      sharingRule: reference.sharingRule,
+      recoveryReceivedBy: normalizeLossRecoveryOwner(input.recoveryReceivedBy),
+      costsSnapshot: [],
+      ...calculated,
+      settlementStatus: 'unsettled',
+      settlementExchangeRate: null,
+      settlementAmountCny: null,
+      settledAt: '',
+      recoveryStatus: 'none',
+      createdBy: cleanLine(input.createdBy).slice(0, 80),
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    };
+    const nextReference = {
+      ...reference,
+      recoveryStatus: eventType === LOSS_EVENT_TYPES.INVENTORY_RECOVERY || recoveredAlready + recoveredAmountUsd >= Number(reference.netLossUsd || 0)
+        ? 'recovered'
+        : 'partial',
+      updatedAt: now.toISOString()
+    };
+
+    await this.state.storage.transaction(async (transaction) => {
+      await transaction.put(`loss_event:${event.id}`, event);
+      await transaction.put(`loss_event:${nextReference.id}`, nextReference);
+      if (nextProduct) await transaction.put(`product:${nextProduct.id}`, nextProduct);
+    });
+    return { event, product: nextProduct, referenceEvent: nextReference };
+  }
+
+  async settleLossEvent(id, input = {}) {
+    const event = await this.state.storage.get(`loss_event:${cleanLine(id)}`);
+    if (!event) throw new Error('异常记录不存在。');
+    if (event.settlementStatus === 'settled') return event;
+    const exchangeRate = positiveNumberOrNull(input.exchangeRate);
+    if (!exchangeRate) throw new Error('结算汇率必须大于 0。');
+    const now = new Date();
+    const settled = {
+      ...event,
+      settlementStatus: 'settled',
+      settlementExchangeRate: exchangeRate,
+      settlementAmountCny: Number((Number(event.hongKongSettlementUsd || 0) * exchangeRate).toFixed(2)),
+      settledAt: now.toLocaleString('zh-CN', { hour12: false }),
+      settledBy: cleanLine(input.settledBy).slice(0, 80),
+      updatedAt: now.toISOString()
+    };
+    await this.state.storage.put(`loss_event:${settled.id}`, settled);
+    return settled;
+  }
+
   async nextPurchaseExpenseId() {
     const expenses = await this.listPurchaseExpenses();
     const maxId = expenses.reduce((max, expense) => {
@@ -1211,6 +1444,25 @@ async function handleApi(request, env, url) {
     return authStore(env).fetch(new Request('https://auth.local/purchase-expenses', {
       method: request.method,
       body: request.method === 'POST' ? await request.text() : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  if (url.pathname === '/api/loss-events' && ['GET', 'POST'].includes(request.method)) {
+    const body = request.method === 'POST' ? await readJson(request) : null;
+    return authStore(env).fetch(new Request('https://auth.local/loss-events', {
+      method: request.method,
+      body: body ? JSON.stringify({ ...body, createdBy: sessionUser.username }) : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  const lossEventSettleMatch = url.pathname.match(/^\/api\/loss-events\/([^/]+)\/settle$/);
+  if (lossEventSettleMatch && request.method === 'POST') {
+    const body = await readJson(request);
+    return authStore(env).fetch(new Request(`https://auth.local/loss-events/${lossEventSettleMatch[1]}/settle`, {
+      method: 'POST',
+      body: JSON.stringify({ ...body, settledBy: sessionUser.username }),
       headers: { 'Content-Type': 'application/json' }
     }));
   }
@@ -2081,8 +2333,36 @@ function normalizeUserRole(value) {
 }
 
 function normalizeAvailabilityStatus(value) {
-  if (value === 'preparing' || value === 'paused') return value;
+  if (['preparing', 'paused', 'compensated', 'damaged'].includes(value)) return value;
   return 'available';
+}
+
+function normalizeLossEventType(value) {
+  return Object.values(LOSS_EVENT_TYPES).includes(value) ? value : '';
+}
+
+function lossCostsSnapshot(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map(sanitizeCost)
+    .filter((item) => item && Number(item.amount || 0) > 0)
+    .map((item) => ({
+      id: item.id,
+      label: item.label,
+      amount: Number(item.amount || 0),
+      owner: item.owner === 'wuhan' ? 'wuhan' : 'hongKong',
+      remark: item.remark || ''
+    }));
+}
+
+function lossProductSnapshot(product = {}) {
+  return {
+    id: product.id,
+    productType: normalizeProductType(product.productType),
+    account: cleanLine(product.account),
+    email: cleanLine(product.email),
+    createdAt: cleanLine(product.createdAt),
+    capturedAt: new Date().toISOString()
+  };
 }
 
 function sanitizeProduct(input, id) {
@@ -2128,6 +2408,9 @@ function sanitizeProduct(input, id) {
     settlementWuhanRetainedUsd: nullableNumber(input.settlementWuhanRetainedUsd),
     settlementHongKongReceivableCny: nullableNumber(input.settlementHongKongReceivableCny),
     settlementWuhanRetainedCny: nullableNumber(input.settlementWuhanRetainedCny),
+    dispositionType: normalizeLossEventType(input.dispositionType),
+    relatedOriginalProductId: input.relatedOriginalProductId ? normalizeProductId(input.relatedOriginalProductId) : '',
+    lossEventId: cleanLine(input.lossEventId),
     saleRemark: String(input.saleRemark || '').slice(0, 500),
     accountType: input.accountType === 'enterprise' ? 'enterprise' : input.accountType === 'personal' ? 'personal' : '',
     accountCreationDate: cleanLine(input.accountCreationDate),
