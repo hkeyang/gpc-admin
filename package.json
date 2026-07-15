@@ -7,6 +7,8 @@
     "dev": "vite --host 0.0.0.0",
     "dev:worker": "npm run build && npx wrangler dev",
     "build": "vite build",
+    "deploy": "npm run deploy:production",
+    "deploy:production": "node scripts/production-deploy-check.mjs && npm run build && npx wrangler deploy && node scripts/production-deploy-check.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "hash-secret": "node scripts/hash-secret.mjs",
     "test": "node --test tests/*.test.mjs"
