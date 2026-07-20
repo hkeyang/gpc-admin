@@ -134,6 +134,27 @@ test('未售账号报损按实际垫付差额结算并可用冲回记录恢复',
   assert.equal(recovery.data.referenceEvent.recoveryStatus, 'recovered');
 });
 
+test('香港独自承担且无需跨方补款时自动标记为无需内部结算', async () => {
+  const replacement = product(4, {
+    costs: [{ id: 1, label: '账号成本', amount: 357, owner: 'hongKong', remark: '' }]
+  });
+  const storage = new MemoryStorage([['product:4', replacement]]);
+  const store = new AuthStore({ storage }, {});
+
+  const result = await call(store, '/loss-events', 'POST', {
+    eventType: LOSS_EVENT_TYPES.INVENTORY_WRITEOFF,
+    productId: 4,
+    sharingRule: 'hongKong'
+  });
+
+  assert.equal(result.status, 201);
+  assert.equal(result.data.event.hongKongBurdenUsd, 357);
+  assert.equal(result.data.event.wuhanBurdenUsd, 0);
+  assert.equal(result.data.event.hongKongSettlementUsd, 0);
+  assert.equal(result.data.event.settlementStatus, 'not_required');
+  assert.equal((await storage.get('product:4')).costs[0].amount, 357);
+});
+
 test('读取空异常账本不会改写任何现有产品', async () => {
   const existing = product(9, { account: 'legacy-account' });
   const storage = new MemoryStorage([['product:9', existing]]);

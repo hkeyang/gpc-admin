@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   LOSS_SHARING_RULES,
+  calculateProfitAttribution,
   calculateLossSettlement,
+  lossEventNeedsInternalSettlement,
   lossSettlementDirection,
   reverseLossSettlement
 } from '../src/loss-ledger.js';
@@ -56,6 +58,33 @@ test('武汉单独承担香港垫付的损失时应返还全部成本', () => {
   assert.deepEqual(lossSettlementDirection(result.hongKongSettlementUsd), {
     label: '武汉应付香港',
     amount: 400
+  });
+});
+
+test('香港独自承担售后后，双方最终利润不再固定五五分', () => {
+  const afterSale = calculateLossSettlement({
+    costs: [{ amount: 357, owner: 'hongKong' }],
+    sharingRule: LOSS_SHARING_RULES.HONG_KONG
+  });
+  const result = calculateProfitAttribution({
+    normalProfitUsd: 600,
+    lossEvents: [afterSale]
+  });
+
+  assert.equal(afterSale.hongKongSettlementUsd, 0);
+  assert.equal(lossEventNeedsInternalSettlement({ ...afterSale, settlementStatus: 'not_required' }), false);
+  assert.deepEqual(result, {
+    normalProfitUsd: 600,
+    normalHongKongProfitUsd: 300,
+    normalWuhanProfitUsd: 300,
+    companyLossUsd: 357,
+    hongKongLossBurdenUsd: 357,
+    wuhanLossBurdenUsd: 0,
+    hongKongExceptionalImpactUsd: -357,
+    wuhanExceptionalImpactUsd: 0,
+    finalCompanyProfitUsd: 243,
+    finalHongKongProfitUsd: -57,
+    finalWuhanProfitUsd: 300
   });
 });
 

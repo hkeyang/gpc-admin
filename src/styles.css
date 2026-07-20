@@ -306,6 +306,21 @@ nav { display: grid; gap: 8px; }
 .icon-bubble.blue { color: #267ee7; background: #eaf4ff; }
 .icon-bubble.orange { color: var(--orange); background: #fff3e2; }
 .icon-bubble.green { color: var(--green); background: #e8fbf3; }
+.profit-attribution-panel { margin-bottom: 14px; }
+.profit-attribution-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) repeat(2, minmax(0, 1fr));
+  border-top: 1px solid #edf0f5;
+  border-bottom: 1px solid #edf0f5;
+}
+.profit-attribution-grid > div { min-width: 0; padding: 13px 16px; border-right: 1px solid #edf0f5; }
+.profit-attribution-grid > div:last-child { border-right: 0; }
+.profit-attribution-grid span { display: block; color: #79849a; font-size: 11px; font-weight: 800; }
+.profit-attribution-grid strong { display: block; margin-top: 7px; color: #26304a; font-size: 20px; letter-spacing: -.2px; overflow-wrap: anywhere; }
+.profit-attribution-grid small { display: block; margin-top: 7px; color: #8a95aa; font-size: 11px; font-weight: 700; line-height: 1.45; }
+.profit-attribution-company { background: #fbfcff; }
+.profit-attribution-party.hong-kong { box-shadow: inset 3px 0 0 #7a5cf8; }
+.profit-attribution-party.wuhan { box-shadow: inset 3px 0 0 #3f8df8; }
 
 .panel {
   background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
@@ -2045,10 +2060,138 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   font: inherit;
   background: #fff;
 }
+.product-account-picker { min-width: 0; }
+.product-account-picker-control {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  overflow: hidden;
+  border: 1px solid #e2e6ef;
+  border-radius: 8px;
+  background: #fff;
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.product-account-picker.is-open .product-account-picker-control {
+  border-color: #9d90ff;
+  box-shadow: 0 0 0 3px rgba(91, 71, 242, .10);
+}
+.product-account-picker-trigger {
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  color: #33405a;
+  font-size: 12px;
+  font-weight: 800;
+}
+.product-account-picker-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.product-account-picker-trigger span.is-placeholder { color: #98a2b4; font-weight: 700; }
+.product-account-picker-trigger svg { margin-left: auto; flex: 0 0 auto; color: #7b879d; }
+.product-account-picker-trigger:disabled { cursor: not-allowed; background: #f8f9fc; }
+.product-account-picker-trigger:disabled svg { opacity: .45; }
+.product-account-picker-clear {
+  width: 38px;
+  border-left: 1px solid #edf0f5;
+  display: grid;
+  place-items: center;
+  color: #8994a7;
+}
+.product-account-picker-clear:hover { color: #5d4ee8; background: #f7f5ff; }
+.product-account-picker-menu {
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid #dfe4ef;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(42, 53, 83, .10);
+  animation: account-picker-open .16s ease-out;
+}
+.product-account-picker-search {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  border-bottom: 1px solid #edf0f5;
+  background: #fbfcff;
+}
+.product-account-picker-search svg { color: #8a95aa; }
+.product-account-picker-search input {
+  min-width: 0;
+  height: 40px;
+  border: 0;
+  outline: 0;
+  color: #344059;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+.product-account-picker-search input::placeholder { color: #a1aaba; }
+.product-account-picker-search span { color: #939daf; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.product-account-picker-results { max-height: 260px; overflow: auto; padding: 5px; }
+.product-account-picker-option {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 38px 10px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  border-radius: 6px;
+  text-align: left;
+}
+.product-account-picker-option:hover { background: #f7f5ff; }
+.product-account-picker-option.is-selected { background: #f1eeff; }
+.product-account-picker-option-main,
+.product-account-picker-option-side { min-width: 0; display: grid; gap: 4px; }
+.product-account-picker-option-main strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #26304a;
+  font-size: 12px;
+}
+.product-account-picker-option small { color: #8792a5; font-size: 11px; font-weight: 700; line-height: 1.35; }
+.product-account-picker-option-side { text-align: right; }
+.product-account-picker-option-side b { color: #5d4ee8; font-size: 11px; white-space: nowrap; }
+.product-account-picker-check { position: absolute; right: 11px; color: #6254e8; }
+.product-account-picker-empty { padding: 24px 12px; text-align: center; color: #929caf; font-size: 12px; font-weight: 700; }
+.product-account-picker-summary {
+  min-width: 0;
+  margin-top: 8px;
+  padding: 9px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-left: 3px solid #6b5cec;
+  border-radius: 0 6px 6px 0;
+  background: #f7f6ff;
+  color: #64708a;
+}
+.product-account-picker-summary svg { flex: 0 0 auto; margin-top: 1px; color: #6657ea; }
+.product-account-picker-summary div { min-width: 0; }
+.product-account-picker-summary strong,
+.product-account-picker-summary span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.product-account-picker-summary strong { color: #303b57; font-size: 12px; }
+.product-account-picker-summary span { margin-top: 3px; color: #7d88a0; font-size: 11px; font-weight: 700; }
+@keyframes account-picker-open {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .loss-preview-strip {
   margin-top: 14px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border-top: 1px solid #eef1f6;
   border-bottom: 1px solid #eef1f6;
 }
@@ -2060,7 +2203,7 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
 .loss-list-panel .panel-head { align-items: center; }
 .loss-list-panel .filter-select { min-width: 132px; }
 .loss-table-wrap { width: 100%; overflow-x: auto; }
-.loss-table { min-width: 1120px; }
+.loss-table { min-width: 1220px; }
 .loss-table td strong { display: block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #26304a; }
 .loss-table td small { display: block; margin-top: 5px; color: #8d97a9; font-size: 11px; font-weight: 700; }
 .loss-table .negative-value { color: #d95555; font-weight: 900; }
@@ -2109,8 +2252,9 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .purchase-expenses-layout { grid-template-columns: 1fr; }
   .purchase-summary-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
   .purchase-editor-panel { position: static; }
-  .loss-preview-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .loss-preview-strip div:nth-child(2) { border-right: 0; }
+  .profit-attribution-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .loss-preview-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .loss-preview-strip div:nth-child(3) { border-right: 0; }
   .filters { grid-template-columns: minmax(160px, 200px) repeat(4, 98px) minmax(160px, 180px) minmax(154px, 180px); }
   .purchase-filters { grid-template-columns: minmax(210px, 260px) 110px minmax(170px, 190px) 70px; }
   .phone-renewal-filters { grid-template-columns: minmax(210px, 260px) 116px 116px 100px minmax(330px, 1fr); }
@@ -2170,4 +2314,11 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
   .total-cost { margin-left: 0; text-align: left; }
   .loss-preview-strip { grid-template-columns: 1fr; }
   .loss-preview-strip div { border-right: 0; }
+  .profit-attribution-grid { grid-template-columns: 1fr; }
+  .profit-attribution-grid > div { border-right: 0; border-bottom: 1px solid #edf0f5; }
+  .profit-attribution-grid > div:last-child { border-bottom: 0; }
+  .product-account-picker-option { grid-template-columns: 1fr; gap: 5px; padding-right: 34px; }
+  .product-account-picker-option-side { text-align: left; grid-template-columns: auto auto; align-items: center; }
+  .product-account-picker-summary strong,
+  .product-account-picker-summary span { white-space: normal; overflow-wrap: anywhere; }
 }

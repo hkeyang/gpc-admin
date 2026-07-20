@@ -1129,7 +1129,7 @@ export class AuthStore {
       recoveryReceivedBy: normalizeLossRecoveryOwner(input.recoveryReceivedBy),
       costsSnapshot,
       ...calculated,
-      settlementStatus: 'unsettled',
+      settlementStatus: Math.abs(Number(calculated.hongKongSettlementUsd || 0)) < 0.005 ? 'not_required' : 'unsettled',
       settlementExchangeRate: null,
       settlementAmountCny: null,
       settledAt: '',
@@ -1215,7 +1215,7 @@ export class AuthStore {
       recoveryReceivedBy: normalizeLossRecoveryOwner(input.recoveryReceivedBy),
       costsSnapshot: [],
       ...calculated,
-      settlementStatus: 'unsettled',
+      settlementStatus: Math.abs(Number(calculated.hongKongSettlementUsd || 0)) < 0.005 ? 'not_required' : 'unsettled',
       settlementExchangeRate: null,
       settlementAmountCny: null,
       settledAt: '',
@@ -1243,7 +1243,7 @@ export class AuthStore {
   async settleLossEvent(id, input = {}) {
     const event = await this.state.storage.get(`loss_event:${cleanLine(id)}`);
     if (!event) throw new Error('异常记录不存在。');
-    if (event.settlementStatus === 'settled') return event;
+    if (event.settlementStatus === 'settled' || event.settlementStatus === 'not_required' || Math.abs(Number(event.hongKongSettlementUsd || 0)) < 0.005) return event;
     const exchangeRate = positiveNumberOrNull(input.exchangeRate);
     if (!exchangeRate) throw new Error('结算汇率必须大于 0。');
     const now = new Date();

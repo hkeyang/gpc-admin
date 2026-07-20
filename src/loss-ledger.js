@@ -25,8 +25,8 @@ export const LOSS_EVENT_LABELS = Object.freeze({
 
 export const LOSS_SHARING_LABELS = Object.freeze({
   [LOSS_SHARING_RULES.EQUAL]: '双方各承担 50%',
-  [LOSS_SHARING_RULES.HONG_KONG]: '香港承担',
-  [LOSS_SHARING_RULES.WUHAN]: '武汉承担'
+  [LOSS_SHARING_RULES.HONG_KONG]: '香港独自承担（保留真实成本）',
+  [LOSS_SHARING_RULES.WUHAN]: '武汉独自承担（保留真实成本）'
 });
 
 export function normalizeLossSharingRule(value) {
@@ -91,6 +91,66 @@ export function lossSettlementDirection(value) {
   if (amount > 0) return { label: '武汉应付香港', amount };
   if (amount < 0) return { label: '香港应付武汉', amount: Math.abs(amount) };
   return { label: '双方无需补款', amount: 0 };
+}
+
+export function lossEventBurdens(event = {}) {
+  const hasStoredHongKongBurden = event.hongKongBurdenUsd !== '' && event.hongKongBurdenUsd != null;
+  const hasStoredWuhanBurden = event.wuhanBurdenUsd !== '' && event.wuhanBurdenUsd != null;
+  const storedHongKongBurden = Number(event.hongKongBurdenUsd);
+  const storedWuhanBurden = Number(event.wuhanBurdenUsd);
+  if (hasStoredHongKongBurden && hasStoredWuhanBurden
+    && Number.isFinite(storedHongKongBurden) && Number.isFinite(storedWuhanBurden)) {
+    return roundMoneyFields({
+      hongKongBurdenUsd: storedHongKongBurden,
+      wuhanBurdenUsd: storedWuhanBurden
+    });
+  }
+
+  const netLossUsd = finiteNumber(event.netLossUsd);
+  const rule = normalizeLossSharingRule(event.sharingRule);
+  const hongKongBurdenUsd = rule === LOSS_SHARING_RULES.HONG_KONG
+    ? netLossUsd
+    : rule === LOSS_SHARING_RULES.WUHAN
+      ? 0
+      : netLossUsd / 2;
+  return roundMoneyFields({
+    hongKongBurdenUsd,
+    wuhanBurdenUsd: netLossUsd - hongKongBurdenUsd
+  });
+}
+
+export function calculateProfitAttribution({ normalProfitUsd = 0, lossEvents = [] } = {}) {
+  const normalProfit = finiteNumber(normalProfitUsd);
+  const lossTotals = (Array.isArray(lossEvents) ? lossEvents : []).reduce((totals, event) => {
+    const burdens = lossEventBurdens(event);
+    totals.companyLossUsd += finiteNumber(event?.netLossUsd);
+    totals.hongKongLossBurdenUsd += burdens.hongKongBurdenUsd;
+    totals.wuhanLossBurdenUsd += burdens.wuhanBurdenUsd;
+    return totals;
+  }, { companyLossUsd: 0, hongKongLossBurdenUsd: 0, wuhanLossBurdenUsd: 0 });
+  const normalHongKongProfitUsd = normalProfit / 2;
+  const normalWuhanProfitUsd = normalProfit - normalHongKongProfitUsd;
+  const finalHongKongProfitUsd = normalHongKongProfitUsd - lossTotals.hongKongLossBurdenUsd;
+  const finalWuhanProfitUsd = normalWuhanProfitUsd - lossTotals.wuhanLossBurdenUsd;
+
+  return roundMoneyFields({
+    normalProfitUsd: normalProfit,
+    normalHongKongProfitUsd,
+    normalWuhanProfitUsd,
+    companyLossUsd: lossTotals.companyLossUsd,
+    hongKongLossBurdenUsd: lossTotals.hongKongLossBurdenUsd,
+    wuhanLossBurdenUsd: lossTotals.wuhanLossBurdenUsd,
+    hongKongExceptionalImpactUsd: -lossTotals.hongKongLossBurdenUsd,
+    wuhanExceptionalImpactUsd: -lossTotals.wuhanLossBurdenUsd,
+    finalCompanyProfitUsd: normalProfit - lossTotals.companyLossUsd,
+    finalHongKongProfitUsd,
+    finalWuhanProfitUsd
+  });
+}
+
+export function lossEventNeedsInternalSettlement(event = {}) {
+  if (event.settlementStatus === 'settled' || event.settlementStatus === 'not_required') return false;
+  return Math.abs(finiteNumber(event.hongKongSettlementUsd)) >= 0.005;
 }
 
 export function reverseLossSettlement(source = {}) {
