@@ -2303,7 +2303,17 @@ function Dashboard({ products, lossEvents = [], exchangeRate, onOpenWorkbench, o
       <div className="kpi-grid six">
         <Kpi icon={WalletCards} label="累计产品" value={`${total} 件`} sub={`可出售 ${availableProducts.length} 件`} tone="purple" />
         <Kpi icon={ShoppingCart} label="累计售出" value={`${sold} 件`} sub={`回款 ${paid} 件`} tone="blue" />
-        <Kpi icon={Coins} label="公司最终净利润" value={money(totalProfit)} sub={`香港 ${money(profitAttribution.finalHongKongProfitUsd)} · 武汉 ${money(profitAttribution.finalWuhanProfitUsd)}`} tone="orange" negative={totalProfit < 0} />
+        <Kpi
+          icon={Coins}
+          label="公司最终净利润"
+          value={money(totalProfit)}
+          subLines={[
+            `香港 ${money(profitAttribution.finalHongKongProfitUsd)}`,
+            `武汉 ${money(profitAttribution.finalWuhanProfitUsd)}`
+          ]}
+          tone="orange"
+          negative={totalProfit < 0}
+        />
         <Kpi icon={TrendingUp} label="本月净利润" value={money(monthlyBars.at(-1)?.profit || 0)} sub="已扣除售后与报损" tone="green" />
         <Kpi icon={Database} label="待回款" value={money(pendingPayment)} sub={`${products.filter((item) => item.isSold && !item.isPaid).length} 笔`} tone="orange" negative />
         <Kpi icon={CreditCard} label={pendingSettlement >= 0 ? '待结算香港' : '香港待结算武汉'} value={money(Math.abs(pendingSettlement))} subValue={cny(Math.abs(usdToCny(pendingSettlement, exchangeRate)))} sub={`${pendingSettlementCount} 笔，含异常结算`} tone="purple" />
@@ -2425,14 +2435,19 @@ function Dashboard({ products, lossEvents = [], exchangeRate, onOpenWorkbench, o
   );
 }
 
-function Kpi({ icon: Icon, label, value, subValue, sub, tone, negative }) {
+function Kpi({ icon: Icon, label, value, subValue, sub, subLines, tone, negative }) {
   return (
-    <div className="kpi-card">
+    <div className={`kpi-card ${subLines?.length ? 'has-sub-lines' : ''}`}>
       <div className={`icon-bubble ${tone}`}><Icon size={20} /></div>
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
         {subValue && <em className="amount-subvalue">{subValue}</em>}
+        {subLines?.length && (
+          <div className="kpi-sub-lines">
+            {subLines.map((line) => <span key={line}>{line}</span>)}
+          </div>
+        )}
         {sub && <p><span>{sub}</span><b className={negative ? 'down' : 'up'}>{negative ? '↓' : '↑'}</b></p>}
       </div>
     </div>
