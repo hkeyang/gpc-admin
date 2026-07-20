@@ -114,7 +114,7 @@ const costOwners = {
   wuhan: 'wuhan'
 };
 const pushTemplateStorageKey = 'gpc_push_templates';
-const authenticatorCodeUrl = 'https://2fa.aisea.space/';
+const authenticatorCodeUrl = 'https://shougema.top/';
 const pushFieldOptions = [
   { key: 'account', label: '账号', placeholder: '{account}' },
   { key: 'password', label: '密码', placeholder: '{password}' },
@@ -183,7 +183,7 @@ function createPushFormat(fields = defaultPushTemplateFields, productType = defa
 const defaultPushTemplates = [
   {
     id: 'list-default',
-    name: '谷歌开发者信息推送',
+    name: '谷歌开发者资料模板',
     scene: 'googleDeveloper',
     fields: defaultPushTemplateFields,
     format: createPushFormat(defaultPushTemplateFields),
@@ -191,7 +191,7 @@ const defaultPushTemplates = [
   },
   {
     id: 'apple-default',
-    name: '苹果开发者信息推送',
+    name: '苹果开发者资料模板',
     scene: 'appleDeveloper',
     fields: defaultPushFieldsForType('appleDeveloper'),
     format: createPushFormat(defaultPushFieldsForType('appleDeveloper'), 'appleDeveloper'),
@@ -1021,54 +1021,38 @@ function promiseWithTimeout(promise, timeoutMs, message = '操作超时，请重
   return Promise.race([promise, timeout]).finally(() => window.clearTimeout(timeoutId));
 }
 
-function normalizePushTemplates(value) {
+function normalizePushTemplates(value, { migrateLegacy = false } = {}) {
   const templates = Array.isArray(value) && value.length ? value : defaultPushTemplates;
   const normalized = templates.map((template, index) => {
     const scene = template.scene === 'products' ? defaultBusinessType : businessTypeConfig(template.scene).id;
     const fieldOptions = pushOptionsForType(scene);
     const fieldKeys = new Set(fieldOptions.map((item) => item.key));
     const fallbackFields = defaultPushFieldsForType(scene);
-    const storedFields = Array.isArray(template.fields) && template.fields.length ? template.fields : fallbackFields;
-    const compatibleFields = storedFields.map((field) => field === 'authenticatorCodeUrl' ? 'verifierLinkUrl' : field);
-    const migratedFields = scene === 'googleDeveloper' && template.id === 'list-default' && !compatibleFields.includes('verifierLinkUrl')
-      ? insertAfterField(compatibleFields, 'phoneSmsCode', 'verifierLinkUrl')
-      : compatibleFields;
-    const fields = migratedFields
+    const storedFields = Array.isArray(template.fields) ? template.fields : fallbackFields;
+    const compatibleFields = migrateLegacy
+      ? storedFields.map((field) => field === 'authenticatorCodeUrl' ? 'verifierLinkUrl' : field)
+      : storedFields;
+    const fields = compatibleFields
       .filter((field) => fieldKeys.has(field));
+    const storedName = String(template.name || '').trim();
+    const legacyName = migrateLegacy && storedName === '谷歌开发者信息推送'
+      ? '谷歌开发者资料模板'
+      : migrateLegacy && storedName === '苹果开发者信息推送'
+        ? '苹果开发者资料模板'
+        : storedName;
+    const storedFormat = typeof template.format === 'string'
+      ? template.format
+      : createPushFormat(fields.length ? fields : fallbackFields, scene);
     return {
       id: template.id || `push-${Date.now()}-${index}`,
-      name: template.name || `${businessTypeConfig(scene).label}信息推送`,
+      name: legacyName || `${businessTypeConfig(scene).label}资料模板`,
       scene,
-      fields: fields.length ? fields : fallbackFields,
-      format: normalizePushFormat(template.format) || createPushFormat(fields.length ? fields : fallbackFields, scene),
+      fields,
+      format: migrateLegacy ? normalizePushFormat(storedFormat) : storedFormat,
       active: Boolean(template.active)
     };
   });
-  const scenes = new Set(normalized.map((template) => template.scene));
-  return [
-    ...normalized,
-    ...defaultPushTemplates.filter((template) => !scenes.has(template.scene))
-  ];
-}
-
-function targetAppliesToScene(target, scene) {
-  return !Array.isArray(target?.scenes) || target.scenes.length === 0 || target.scenes.includes(scene);
-}
-
-function targetSceneLabels(target) {
-  if (!Array.isArray(target?.scenes) || target.scenes.length === 0) return '全部业务';
-  return target.scenes.map((scene) => businessTypeConfig(scene).shortLabel || businessTypeConfig(scene).label).join('、');
-}
-
-function insertAfterField(fields, anchor, inserted) {
-  if (fields.includes(inserted)) return fields;
-  const anchorIndex = fields.indexOf(anchor);
-  if (anchorIndex < 0) return [...fields, inserted];
-  return [
-    ...fields.slice(0, anchorIndex + 1),
-    inserted,
-    ...fields.slice(anchorIndex + 1)
-  ];
+  return normalized;
 }
 
 function normalizePushFormat(format) {
@@ -1088,9 +1072,9 @@ function normalizePushFormat(format) {
 function readStoredPushTemplates() {
   try {
     const stored = JSON.parse(window.localStorage.getItem(pushTemplateStorageKey) || '[]');
-    return normalizePushTemplates(stored);
+    return Array.isArray(stored) && stored.length ? normalizePushTemplates(stored, { migrateLegacy: true }) : [];
   } catch {
-    return defaultPushTemplates;
+    return [];
   }
 }
 
@@ -1170,16 +1154,34 @@ function formatPhoneNumber(phoneCode, phone) {
 
 function buildProductPushMessage(product, template = defaultPushTemplates[0]) {
   const productType = productBusinessType(product);
-  const options = pushOptionsForType(productType);
-  const fields = Array.isArray(template.fields) && template.fields.length ? template.fields : defaultPushFieldsForType(productType);
-  const format = normalizePushFormat(template.format) || createPushFormat(fields, productType);
+  const fields = Array.isArray(template.fields) ? template.fields : defaultPushFieldsForType(productType);
+  const format = typeof template.format === 'string' ? template.format : createPushFormat(fields, productType);
   return pushFieldOptions.reduce((message, field) => {
     return message.replaceAll(field.placeholder, cleanMessageValue(productPushValue(product, field.key)));
-  }, format || createPushFormat(options.map((item) => item.key), productType));
+  }, format);
 }
 
 function cleanMessageValue(value) {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+async function copyTextToClipboard(value) {
+  const text = String(value || '');
+  if (!text) throw new Error('没有可复制的内容。');
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('浏览器未允许复制，请手动选择内容。');
 }
 
 function normalizeSalesCustomerUsername(value) {
@@ -1273,14 +1275,16 @@ function App() {
   const [salesCustomerSync, setSalesCustomerSync] = useState({ loading: false, saving: false, message: '' });
   const [purchaseExpenseSync, setPurchaseExpenseSync] = useState({ loading: false, saving: false, message: '' });
   const [lossEventSync, setLossEventSync] = useState({ loading: false, saving: false, message: '' });
-  const [pushTemplates, setPushTemplates] = useState(readStoredPushTemplates);
-  const [telegramTargets, setTelegramTargets] = useState([]);
-  const [telegramTargetSync, setTelegramTargetSync] = useState({ loading: false, message: '' });
+  const [pushTemplates, setPushTemplates] = useState(defaultPushTemplates);
+  const [pushTemplateSync, setPushTemplateSync] = useState({ loading: true, saving: false, message: '' });
   const [deviceId] = useState(getDeviceId);
   const [authState, setAuthState] = useState({ loading: true, authenticated: false, user: null, pendingRequestId: '' });
   const [adminLoginRequests, setAdminLoginRequests] = useState([]);
   const [exchangeRate, setExchangeRate] = useState(defaultExchangeRate);
   const adminLoginRequestsActive = useRef(false);
+  const pushTemplatesReady = useRef(false);
+  const pushTemplatesLastSaved = useRef('');
+  const pushTemplateSaveVersion = useRef(0);
   const activeProduct = draftProduct && draftProduct.id === activeId
     ? draftProduct
     : products.find((item) => item.id === activeId) || products[0] || null;
@@ -1309,22 +1313,6 @@ function App() {
       || defaultPushTemplates.find((item) => item.scene === productType)
       || defaultPushTemplates[0];
   }, [pushTemplates]);
-
-  const loadTelegramTargets = async () => {
-    if (!authState.authenticated || isGoogleDeveloperUser) {
-      setTelegramTargets([]);
-      return;
-    }
-    setTelegramTargetSync((current) => ({ ...current, loading: true }));
-    try {
-      const data = await apiJson('/api/telegram/targets');
-      setTelegramTargets(Array.isArray(data.targets) ? data.targets : []);
-      setTelegramTargetSync({ loading: false, message: '' });
-    } catch (error) {
-      setTelegramTargets([]);
-      setTelegramTargetSync({ loading: false, message: error.message || '电报接收对象加载失败' });
-    }
-  };
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -1371,12 +1359,87 @@ function App() {
   }, [authState.authenticated, isSuperAdmin]);
 
   useEffect(() => {
-    window.localStorage.setItem(pushTemplateStorageKey, JSON.stringify(pushTemplates));
-  }, [pushTemplates]);
+    if (!authState.authenticated || isGoogleDeveloperUser) {
+      pushTemplatesReady.current = false;
+      pushTemplatesLastSaved.current = '';
+      setPushTemplates(defaultPushTemplates);
+      setPushTemplateSync({ loading: false, saving: false, message: '' });
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadContentTemplates = async () => {
+      setPushTemplateSync({ loading: true, saving: false, message: '正在同步内容模板...' });
+      try {
+        const data = await apiJson('/api/content-templates');
+        let templates;
+        let message = '已从后台同步内容模板。';
+
+        if (Array.isArray(data.templates) && data.templates.length) {
+          templates = normalizePushTemplates(data.templates);
+        } else if (isSuperAdmin) {
+          const localTemplates = readStoredPushTemplates();
+          const migrationTemplates = localTemplates.length ? localTemplates : defaultPushTemplates;
+          const migrated = await apiJson('/api/content-templates', {
+            method: 'PUT',
+            body: JSON.stringify({ templates: migrationTemplates })
+          });
+          templates = normalizePushTemplates(migrated.templates);
+          message = localTemplates.length
+            ? '已将当前浏览器模板迁移到后台。'
+            : '已在后台建立默认内容模板。';
+        } else {
+          templates = defaultPushTemplates;
+          message = '后台尚未建立内容模板，请联系超级管理员。';
+        }
+
+        if (cancelled) return;
+        const normalized = normalizePushTemplates(templates);
+        pushTemplatesLastSaved.current = JSON.stringify(normalized);
+        pushTemplatesReady.current = true;
+        setPushTemplates(normalized);
+        setPushTemplateSync({ loading: false, saving: false, message });
+      } catch (error) {
+        if (cancelled) return;
+        const localTemplates = readStoredPushTemplates();
+        const fallback = localTemplates.length ? localTemplates : defaultPushTemplates;
+        pushTemplatesReady.current = false;
+        setPushTemplates(fallback);
+        setPushTemplateSync({ loading: false, saving: false, message: error.message || '内容模板同步失败，当前使用本机备份。' });
+      }
+    };
+
+    loadContentTemplates();
+    return () => {
+      cancelled = true;
+    };
+  }, [authState.authenticated, isGoogleDeveloperUser, isSuperAdmin]);
 
   useEffect(() => {
-    loadTelegramTargets();
-  }, [authState.authenticated, isGoogleDeveloperUser]);
+    if (!pushTemplatesReady.current || !authState.authenticated || !isSuperAdmin) return undefined;
+    const serialized = JSON.stringify(pushTemplates);
+    if (serialized === pushTemplatesLastSaved.current) return undefined;
+
+    const saveVersion = pushTemplateSaveVersion.current + 1;
+    pushTemplateSaveVersion.current = saveVersion;
+    setPushTemplateSync((current) => ({ ...current, saving: true, message: '正在保存内容模板...' }));
+    const timer = window.setTimeout(async () => {
+      try {
+        await apiJson('/api/content-templates', {
+          method: 'PUT',
+          body: JSON.stringify({ templates: pushTemplates })
+        });
+        if (pushTemplateSaveVersion.current !== saveVersion) return;
+        pushTemplatesLastSaved.current = serialized;
+        setPushTemplateSync({ loading: false, saving: false, message: '内容模板已保存到后台。' });
+      } catch (error) {
+        if (pushTemplateSaveVersion.current !== saveVersion) return;
+        setPushTemplateSync({ loading: false, saving: false, message: error.message || '内容模板保存失败，请重试。' });
+      }
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [pushTemplates, authState.authenticated, isSuperAdmin]);
 
   const setPage = (nextPage) => {
     if (isGoogleDeveloperUser && nextPage !== googleDeveloperPageId) {
@@ -1893,8 +1956,6 @@ function App() {
               products={visibleProducts}
               exchangeRate={exchangeRate}
               pushTemplate={listPushTemplate(productType)}
-              telegramTargets={telegramTargets}
-              telegramTargetsLoading={telegramTargetSync.loading}
               onAddProduct={() => addProduct(productType)}
               onOpenWorkbench={(id) => {
                 setActiveId(id);
@@ -1948,13 +2009,10 @@ function App() {
         )}
         {isSuperAdmin && page === 'push-settings' && (
           <PushSettingsPage
-            user={currentUser}
             products={products}
             templates={pushTemplates}
-            telegramTargets={telegramTargets}
-            telegramTargetSync={telegramTargetSync}
+            templateSync={pushTemplateSync}
             onChange={setPushTemplates}
-            onTargetsChanged={loadTelegramTargets}
           />
         )}
         {page === 'settings' && isSuperAdmin && (
@@ -2020,7 +2078,7 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
     <main className="login-page">
       <section className="login-card">
         <div className="login-brand">
-          <img className="brand-logo" src="/google-logo.svg" alt="Google" />
+          <img className="brand-logo" src="/admin-icon.png" alt="GPC 管理" />
           <div>
             <strong>GPC管理</strong>
             <p>轻量产品管理平台</p>
@@ -2080,7 +2138,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount, products = [], ac
     ...(isSuperAdmin ? [{ id: 'phone-renewals', label: '手机号续费', icon: MessageSquareText }] : []),
     { id: 'loss-events', label: '异常处理', icon: AlertTriangle },
     { id: 'purchase-expenses', label: '代采购费用', icon: ReceiptText },
-    ...(isSuperAdmin ? [{ id: 'push-settings', label: '推送设置', icon: Send }] : []),
+    ...(isSuperAdmin ? [{ id: 'push-settings', label: '内容模板', icon: Copy }] : []),
     { id: 'settings', label: '系统设置', icon: Settings }
   ].filter((item) => item.id !== 'settings' || isSuperAdmin);
   const nav = [
@@ -2091,7 +2149,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount, products = [], ac
   return (
     <aside className="sidebar">
       <div className="brand">
-        <img className="brand-logo" src="/google-logo.svg" alt="Google" />
+        <img className="brand-logo" src="/admin-icon.png" alt="GPC 管理" />
         <div>
           <strong>GPC管理</strong>
           <p>轻量产品管理平台</p>
@@ -2418,7 +2476,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ productType, products, exchangeRate, pushTemplate, telegramTargets = [], telegramTargetsLoading = false, onOpenWorkbench, onAddProduct, title }) {
+function ProductsPage({ productType, products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, title }) {
   const [keyword, setKeyword] = useState('');
   const [availabilityFilter, setAvailabilityFilter] = useState('在售列表');
   const [saleFilter, setSaleFilter] = useState('全部');
@@ -2428,9 +2486,7 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
   const [dateTo, setDateTo] = useState('');
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
-  const [pushState, setPushState] = useState({ productId: '', message: '' });
-  const [openPushMenuId, setOpenPushMenuId] = useState('');
-  const pushTargets = useMemo(() => telegramTargets.filter((target) => targetAppliesToScene(target, productType)), [telegramTargets, productType]);
+  const [copyState, setCopyState] = useState({ product: null, content: '', message: '' });
 
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
@@ -2471,37 +2527,13 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
     setDateFrom('');
     setDateTo('');
   };
-  const togglePushMenu = (product) => {
-    if (telegramTargetsLoading) return;
-    if (pushTargets.length === 0) {
-      setPushState({ productId: '', message: '当前业务没有可用的电报接收对象，请先到推送设置里添加并勾选适用业务。' });
-      return;
-    }
-    setOpenPushMenuId((current) => current === product.id ? '' : product.id);
-  };
-  const pushProduct = async (product, targetId) => {
-    const target = pushTargets.find((item) => item.id === targetId);
-    if (!target) {
-      setPushState({ productId: '', message: '请选择电报发送对象后再推送。' });
-      return;
-    }
-
-    setOpenPushMenuId('');
-    setPushState({ productId: product.id, message: `正在推送 ${product.account || `#${product.id}`} 到 ${target.label}...` });
-    try {
-      await apiJson('/api/telegram/push', {
-        method: 'POST',
-        body: JSON.stringify({ message: buildProductPushMessage(product, pushTemplate), targetId })
-      });
-      setPushState({ productId: '', message: `已推送 ${product.account || `#${product.id}`} 到 ${target.label}。` });
-    } catch (error) {
-      setPushState({ productId: '', message: error.message || 'Telegram 推送失败，请稍后重试。' });
-    }
+  const previewProductCopy = (product) => {
+    setCopyState({ product, content: buildProductPushMessage(product, pushTemplate), message: '' });
   };
 
   return (
     <section className="page products-page">
-      <div className="page-title"><h1>{title}</h1><span>产品列表、推送与结算入口</span></div>
+      <div className="page-title"><h1>{title}</h1><span>产品列表、资料复制与结算入口</span></div>
       <div className="kpi-grid five compact">
         <Kpi icon={Box} label="产品总数" value={String(products.length)} tone="purple" />
         <Kpi icon={ShoppingCart} label="可出售" value={String(availableProducts.length)} tone="blue" />
@@ -2523,7 +2555,7 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
               <button className="primary-button" onClick={onAddProduct}><Plus size={16} /> 新增产品</button>
             </div>
           </div>
-          {pushState.message && <div className="inline-notice product-list-notice"><Info size={15} />{pushState.message}</div>}
+          {copyState.message && <div className="inline-notice product-list-notice"><Info size={15} />{copyState.message}</div>}
           {products.length === 0 ? (
             <EmptyState icon={Box} title="暂无产品" text="先新增产品，再录入账号资料、成本、销售与结算信息。" />
           ) : filteredProducts.length === 0 ? (
@@ -2532,13 +2564,8 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
             <>
               <ProductTable
                 products={paginatedProducts}
-                telegramTargets={pushTargets}
-                telegramTargetsLoading={telegramTargetsLoading}
-                openPushMenuId={openPushMenuId}
-                onTogglePushMenu={togglePushMenu}
                 onOpenWorkbench={onOpenWorkbench}
-                onPushProduct={pushProduct}
-                pushingId={pushState.productId}
+                onPreviewCopy={previewProductCopy}
               />
               <div className="pagination">
                 <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
@@ -2566,6 +2593,15 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, teleg
           <div className="hint-card"><Info size={18} />提示：点击 “工作台” 可进入单个产品的详细录入与结算页面</div>
         </aside>
       </div>
+      {copyState.product && (
+        <ProductCopyModal
+          product={copyState.product}
+          content={copyState.content}
+          onChange={(content) => setCopyState((current) => ({ ...current, content, message: '' }))}
+          onClose={() => setCopyState({ product: null, content: '', message: '' })}
+          onCopied={() => setCopyState((current) => ({ ...current, message: `已复制 ${current.product?.account || `#${current.product?.id}`} 的资料，可以直接粘贴发送。` }))}
+        />
+      )}
     </section>
   );
 }
@@ -2604,7 +2640,7 @@ function DateRangeFilter({ from, to, onFromChange, onToChange }) {
   );
 }
 
-function ProductTable({ products, telegramTargets, telegramTargetsLoading, openPushMenuId, onTogglePushMenu, onOpenWorkbench, onPushProduct, pushingId }) {
+function ProductTable({ products, onOpenWorkbench, onPreviewCopy }) {
   return (
     <table className="product-table product-list-table">
       <thead>
@@ -2630,31 +2666,63 @@ function ProductTable({ products, telegramTargets, telegramTargetsLoading, openP
               <td><StatusBadge label={settlementStatusLabel(item)} /></td>
               <td className="actions">
                 <button onClick={() => onOpenWorkbench(item.id)}>工作台</button>
-                <div className="push-menu">
-                  <button
-                    className="push-menu-button"
-                    disabled={pushingId === item.id || telegramTargetsLoading}
-                    onClick={() => onTogglePushMenu(item)}
-                  >
-                    {pushingId === item.id ? '推送中' : telegramTargetsLoading ? '加载中' : '推送'}
-                    <ChevronDown size={12} />
-                  </button>
-                  {openPushMenuId === item.id && telegramTargets.length > 0 && (
-                    <div className="push-menu-list">
-                      {telegramTargets.map((target) => (
-                        <button key={target.id} onClick={() => onPushProduct(item, target.id)}>
-                          {target.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <button className="copy-product-button" onClick={() => onPreviewCopy(item)}><Copy size={13} />复制资料</button>
               </td>
             </tr>
           );
         })}
       </tbody>
     </table>
+  );
+}
+
+function ProductCopyModal({ product, content, onChange, onClose, onCopied }) {
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [onClose]);
+
+  const confirmCopy = async () => {
+    setError('');
+    try {
+      await copyTextToClipboard(content);
+      setCopied(true);
+      onCopied?.();
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch (copyError) {
+      setCopied(false);
+      setError(copyError.message || '复制失败，请手动选择内容。');
+    }
+  };
+
+  return (
+    <div className="value-modal-backdrop" onClick={onClose}>
+      <section className="value-modal copy-preview-modal" role="dialog" aria-modal="true" aria-labelledby="copy-preview-title" onClick={(event) => event.stopPropagation()}>
+        <div className="value-modal-head">
+          <div className="copy-preview-title">
+            <strong id="copy-preview-title">复制资料前预览</strong>
+            <span>{product.account || product.email || `产品 #${product.id}`}</span>
+          </div>
+          <button type="button" onClick={onClose} aria-label="关闭"><X size={16} /></button>
+        </div>
+        <p className="copy-preview-hint">可以在这里临时修改文案；修改只影响本次复制，不会改动产品资料。</p>
+        <textarea value={content} onChange={(event) => { onChange(event.target.value); setCopied(false); }} autoFocus spellCheck="false" />
+        {error && <div className="copy-preview-error">{error}</div>}
+        <div className="copy-preview-footer">
+          <span>{content.length} 个字符</span>
+          <div>
+            <button className="secondary-button" type="button" onClick={onClose}>取消</button>
+            <button className="primary-button" type="button" onClick={confirmCopy} disabled={!content.trim()}><Copy size={15} />{copied ? '已复制' : '复制内容'}</button>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -4871,16 +4939,13 @@ function Panel({ title, hint, action, className = '', children }) {
   );
 }
 
-function PushSettingsPage({ user, products, templates, telegramTargets = [], telegramTargetSync, onChange, onTargetsChanged }) {
+function PushSettingsPage({ products, templates, templateSync, onChange }) {
   const [activeId, setActiveId] = useState(templates[0]?.id || defaultPushTemplates[0].id);
-  const [targetDraft, setTargetDraft] = useState({ label: '', botToken: '', chatId: '', scenes: businessTypes.map((item) => item.id) });
-  const [targetMessage, setTargetMessage] = useState('');
   const activeTemplate = templates.find((item) => item.id === activeId) || templates[0] || defaultPushTemplates[0];
   const activeBusiness = businessTypeConfig(activeTemplate.scene);
   const activePushFields = pushOptionsForType(activeBusiness.id);
   const previewProduct = products.find((item) => productBusinessType(item) === activeBusiness.id) || createBlankProduct(activeBusiness.id);
   const previewMessage = buildProductPushMessage(previewProduct, activeTemplate);
-  const canManageTelegramTargets = user?.role === 'super_admin';
 
   useEffect(() => {
     if (!templates.some((item) => item.id === activeId)) {
@@ -4896,7 +4961,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
     const fields = defaultPushFieldsForType(scene);
     const nextTemplate = {
       id: `push-${Date.now()}`,
-      name: `新的${businessTypeConfig(scene).label}推送`,
+      name: `新的${businessTypeConfig(scene).label}资料模板`,
       scene,
       fields,
       format: createPushFormat(fields, scene),
@@ -4907,7 +4972,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
   };
   const deleteTemplate = () => {
     if (templates.length <= 1) return;
-    const confirmed = window.confirm(`确定删除推送类型「${activeTemplate.name}」吗？`);
+    const confirmed = window.confirm(`确定删除内容模板「${activeTemplate.name}」吗？`);
     if (!confirmed) return;
     onChange((current) => current.filter((item) => item.id !== activeTemplate.id));
   };
@@ -4933,51 +4998,20 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
       name: activeTemplate.name.includes(activeBusiness.label) ? activeTemplate.name.replace(activeBusiness.label, businessTypeConfig(nextScene).label) : activeTemplate.name
     });
   };
-  const toggleTargetScene = (scene) => {
-    setTargetDraft((current) => {
-      const exists = current.scenes.includes(scene);
-      const scenes = exists ? current.scenes.filter((item) => item !== scene) : [...current.scenes, scene];
-      return { ...current, scenes };
-    });
-  };
-  const createTelegramTarget = async () => {
-    if (!canManageTelegramTargets) return;
-    setTargetMessage('');
-    try {
-      const data = await apiJson('/api/telegram/targets', {
-        method: 'POST',
-        body: JSON.stringify(targetDraft)
-      });
-      setTargetMessage(`已新增电报接收对象：${data.target.label}`);
-      setTargetDraft({ label: '', botToken: '', chatId: '', scenes: businessTypes.map((item) => item.id) });
-      onTargetsChanged?.();
-    } catch (error) {
-      setTargetMessage(error.message || '新增电报接收对象失败');
-    }
-  };
-  const deleteTelegramTarget = async (target) => {
-    if (!canManageTelegramTargets || target.source === 'env') return;
-    const confirmed = window.confirm(`确定删除电报接收对象「${target.label}」吗？`);
-    if (!confirmed) return;
-    setTargetMessage('');
-    try {
-      await apiJson(`/api/telegram/targets/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
-      setTargetMessage(`已删除电报接收对象：${target.label}`);
-      onTargetsChanged?.();
-    } catch (error) {
-      setTargetMessage(error.message || '删除电报接收对象失败');
-    }
-  };
-
   return (
     <section className="page push-settings-page">
-      <div className="page-title"><h1>推送设置</h1><span>配置列表页推送类型、字段、消息格式和电报接收对象</span></div>
+      <div className="page-title"><h1>内容模板</h1><span>配置列表页复制资料时使用的字段和消息格式</span></div>
+      {templateSync?.message && (
+        <div className={`inline-notice template-sync-notice ${templateSync.saving || templateSync.loading ? 'is-saving' : ''}`}>
+          <RefreshCw size={15} />{templateSync.message}
+        </div>
+      )}
       <div className="push-settings-grid">
         <Panel
-          title="推送类型"
-          hint="每个类型可以指定使用场景和推送内容"
+          title="资料模板"
+          hint="每个模板可以指定业务场景和复制内容"
           className="push-type-panel"
-          action={<button className="primary-button" onClick={addTemplate}><Plus size={15} /> 新建推送类型</button>}
+          action={<button className="primary-button" onClick={addTemplate}><Plus size={15} /> 新建模板</button>}
         >
           <div className="push-template-list">
             {templates.map((template) => (
@@ -4987,7 +5021,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
                 onClick={() => setActiveId(template.id)}
               >
                 <strong>{template.name}</strong>
-                <span>推送{businessTypeConfig(template.scene).label} · {template.fields.length} 个字段</span>
+                <span>{businessTypeConfig(template.scene).label} · {template.fields.length} 个字段</span>
                 {template.active && <b>当前使用</b>}
               </button>
             ))}
@@ -5001,12 +5035,12 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
               <span>使用场景</span>
               <div className="input-shell">
                 <select value={activeTemplate.scene} onChange={(event) => updateScene(event.target.value)}>
-                  {businessTypes.map((item) => <option key={item.id} value={item.id}>推送{item.label}</option>)}
+                  {businessTypes.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
                 </select>
               </div>
             </label>
             <div className="field-picker wide-settings">
-              <span>选择推送信息</span>
+              <span>选择复制信息</span>
               <div className="field-grid">
                 {activePushFields.map((field) => (
                   <label className="checkbox-chip" key={field.key}>
@@ -5017,7 +5051,7 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
               </div>
             </div>
             <label className="input-label wide-settings">
-              <span>推送格式</span>
+              <span>复制格式</span>
               <textarea
                 className="format-editor"
                 value={activeTemplate.format}
@@ -5036,46 +5070,6 @@ function PushSettingsPage({ user, products, templates, telegramTargets = [], tel
           </div>
         </Panel>
       </div>
-      <Panel title="电报接收对象" hint="可给 Jeff 这类对象单独填 Bot Token；留空则使用系统统一 Bot。">
-        <div className="telegram-target-layout">
-          <div className="telegram-target-list">
-            {telegramTargetSync?.loading && <div className="inline-notice"><RefreshCw size={15} />正在加载电报接收对象...</div>}
-            {!telegramTargetSync?.loading && telegramTargets.length === 0 && <EmptyState icon={Send} title="暂无电报接收对象" text="新增对象后，列表页才能选择并推送。" />}
-            {telegramTargets.map((target) => (
-              <div className="telegram-target-card" key={target.id}>
-                <div>
-                  <strong>{target.label}</strong>
-                  <span>{targetSceneLabels(target)} · {target.source === 'env' ? '环境变量' : '后台配置'} · {target.hasCustomBotToken ? '专属 Bot' : '统一 Bot'}</span>
-                </div>
-                <button className="danger-button" disabled={!canManageTelegramTargets || target.source === 'env'} onClick={() => deleteTelegramTarget(target)}>
-                  <Trash2 size={14} /> 删除
-                </button>
-              </div>
-            ))}
-          </div>
-          <div className="telegram-target-editor">
-            <Input label="对象名称" value={targetDraft.label} onChange={(value) => setTargetDraft({ ...targetDraft, label: value })} disabled={!canManageTelegramTargets} />
-            <Input label="Bot Token（可选）" type="password" value={targetDraft.botToken} onChange={(value) => setTargetDraft({ ...targetDraft, botToken: value })} disabled={!canManageTelegramTargets} />
-            <Input label="Chat ID（不是 Bot Token）" value={targetDraft.chatId} onChange={(value) => setTargetDraft({ ...targetDraft, chatId: value })} disabled={!canManageTelegramTargets} />
-            <div className="field-picker wide-settings">
-              <span>适用业务</span>
-              <div className="field-grid">
-                {businessTypes.map((item) => (
-                  <label className="checkbox-chip" key={item.id}>
-                    <input type="checkbox" disabled={!canManageTelegramTargets} checked={targetDraft.scenes.includes(item.id)} onChange={() => toggleTargetScene(item.id)} />
-                    <span>{item.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            <button className="primary-button" disabled={!canManageTelegramTargets || !targetDraft.label.trim() || !targetDraft.chatId.trim()} onClick={createTelegramTarget}>
-              <Plus size={15} /> 新增接收对象
-            </button>
-            {targetMessage && <div className="settings-message">{targetMessage}</div>}
-            {telegramTargetSync?.message && <div className="settings-message">{telegramTargetSync.message}</div>}
-          </div>
-        </div>
-      </Panel>
     </section>
   );
 }

@@ -7,17 +7,32 @@ import {
 } from '../src/loss-ledger.js';
 
 const SESSION_COOKIE = 'gpc_session';
-const SESSION_MAX_AGE = 60 * 60 * 12;
+const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 const VERIFIER_TOKEN_MAX_AGE = 60 * 60 * 24 * 365;
 const VERIFIER_SHORT_CODE_LENGTH = 10;
 const VERIFIER_RECOVERY_UNLOCK_TTL = 5 * 60;
 const VERIFIER_RECOVERY_FAILURE_LIMIT = 3;
 const VERIFIER_RECOVERY_COOLDOWNS = [15 * 60, 60 * 60, 24 * 60 * 60];
-const DEFAULT_VERIFIER_BASE_URL = 'https://2fa.aisea.space/';
+const DEFAULT_VERIFIER_BASE_URL = 'https://shougema.top/';
 const MICROSOFT_DEFAULT_TENANT = 'consumers';
 const MICROSOFT_GRAPH_SCOPE = 'offline_access User.Read Mail.Read';
 const DEFAULT_PRODUCTS = [];
 const GOOGLE_DEVELOPER_ROLE = 'google_developer';
+const CONTENT_TEMPLATE_SCENES = new Set(['googleDeveloper', 'appleDeveloper']);
+const CONTENT_TEMPLATE_FIELDS = new Set([
+  'account',
+  'password',
+  'email',
+  'recoveryEmailPassword',
+  'phone',
+  'googleAuth',
+  'securityCode',
+  'phoneSmsCode',
+  'verifierLinkUrl',
+  'vpsRemoteUrl',
+  'smsLink',
+  'remark'
+]);
 
 export class AuthStore {
   constructor(state, env) {
@@ -175,6 +190,28 @@ export class AuthStore {
     if (url.pathname === '/products' && request.method === 'DELETE') {
       const deleted = await this.clearProducts();
       return json({ ok: true, deleted });
+    }
+
+    if (url.pathname === '/content-templates' && request.method === 'GET') {
+      const stored = await this.state.storage.get('content_templates');
+      return json({
+        templates: Array.isArray(stored?.templates) ? stored.templates : [],
+        updatedAt: cleanLine(stored?.updatedAt),
+        updatedBy: cleanLine(stored?.updatedBy)
+      });
+    }
+
+    if (url.pathname === '/content-templates' && request.method === 'PUT') {
+      const body = await readJson(request);
+      const result = sanitizeContentTemplates(body.templates);
+      if (result.error) return json({ message: result.error }, 400);
+      const stored = {
+        templates: result.templates,
+        updatedAt: new Date().toISOString(),
+        updatedBy: cleanLine(body.updatedBy).slice(0, 80)
+      };
+      await this.state.storage.put('content_templates', stored);
+      return json(stored);
     }
 
     if (url.pathname === '/sales-customers' && request.method === 'GET') {
@@ -499,7 +536,9 @@ export class AuthStore {
     await this.ensureDefaultProducts();
     await this.cleanupDuplicateProducts();
     const entries = await this.state.storage.list({ prefix: 'product:' });
-    return [...entries.values()].sort((a, b) => compareProductIds(b.id, a.id));
+    return [...entries.values()]
+      .map((product) => ({ ...product, verifierLinkUrl: migrateVerifierLinkUrl(product.verifierLinkUrl) }))
+      .sort((a, b) => compareProductIds(b.id, a.id));
   }
 
   async listSalesCustomers() {
@@ -1245,6 +1284,13 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    // Incident containment: the public custom domain was flagged for phishing.
+    // Keep every route, including APIs, unavailable until the registrar hold is
+    // lifted and the credential-handling workflow has been redesigned.
+    if (url.hostname === 'youxi.aisea.space') {
+      return incidentMaintenanceResponse();
+    }
+
     if (url.pathname.startsWith('/api/')) {
       return handleApi(request, env, url);
     }
@@ -1252,6 +1298,45 @@ export default {
     return env.ASSETS.fetch(request);
   }
 };
+
+function incidentMaintenanceResponse() {
+  const body = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow, noarchive">
+  <title>系统安全维护中</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f5f7fb; color: #182230; }
+    main { width: min(92vw, 560px); padding: 40px; border: 1px solid #e4e9f0; border-radius: 18px; background: #fff; box-shadow: 0 18px 50px rgba(20, 35, 60, .08); }
+    h1 { margin: 0 0 16px; font-size: 28px; }
+    p { margin: 0; color: #526071; line-height: 1.75; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>系统安全维护中</h1>
+    <p>该管理系统已暂停访问并正在进行安全检查。当前页面不会要求您输入账号、密码、验证码或其他个人信息。</p>
+  </main>
+</body>
+</html>`;
+
+  return new Response(body, {
+    status: 503,
+    headers: {
+      'Content-Type': 'text/html; charset=UTF-8',
+      'Cache-Control': 'no-store, max-age=0',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'DENY',
+      'X-Robots-Tag': 'noindex, nofollow, noarchive'
+    }
+  });
+}
 
 async function handleApi(request, env, url) {
   if (request.method === 'OPTIONS') {
@@ -1290,10 +1375,19 @@ async function handleApi(request, env, url) {
         'Set-Cookie': `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`
       });
     }
+    const refreshedToken = sessionUser ? await signSession({
+      userId: sessionUser.id,
+      username: sessionUser.username,
+      role: sessionUser.role,
+      deviceId: session.deviceId,
+      exp: nowSeconds() + SESSION_MAX_AGE
+    }, env.SESSION_SECRET) : '';
     return json({
       authenticated: Boolean(sessionUser),
       user: sessionUser
-    });
+    }, 200, refreshedToken ? {
+      'Set-Cookie': sessionCookie(refreshedToken, SESSION_MAX_AGE)
+    } : {});
   }
 
   if (url.pathname === '/api/auth/login' && request.method === 'POST') {
@@ -1419,6 +1513,20 @@ async function handleApi(request, env, url) {
     return authStore(env).fetch(new Request('https://auth.local/products', {
       method: request.method,
       body: request.method === 'POST' ? await request.text() : undefined,
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  if (url.pathname === '/api/content-templates' && request.method === 'GET') {
+    return authStore(env).fetch('https://auth.local/content-templates');
+  }
+
+  if (url.pathname === '/api/content-templates' && request.method === 'PUT') {
+    if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以修改内容模板' }, 403);
+    const body = await readJson(request);
+    return authStore(env).fetch(new Request('https://auth.local/content-templates', {
+      method: 'PUT',
+      body: JSON.stringify({ templates: body.templates, updatedBy: sessionUser.username }),
       headers: { 'Content-Type': 'application/json' }
     }));
   }
@@ -1735,7 +1843,7 @@ async function readVerifierSmsCode(request, env, url) {
       method: 'GET',
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
-        'User-Agent': 'Mozilla/5.0 (compatible; GPCVerifier/1.0; +https://2fa.aisea.space)'
+        'User-Agent': 'Mozilla/5.0 (compatible; GPCVerifier/1.0; +https://shougema.top)'
       }
     });
     const text = await response.text();
@@ -1840,6 +1948,21 @@ function normalizedVerifierBaseUrl(value) {
   return url.toString();
 }
 
+function migrateVerifierLinkUrl(value) {
+  const text = cleanLine(value);
+  if (!text) return '';
+  try {
+    const url = new URL(text);
+    if (!['2fa.aisea.space', '2fa.hashkey-eyang.workers.dev'].includes(url.hostname)) return text;
+    const migrated = new URL(DEFAULT_VERIFIER_BASE_URL);
+    migrated.search = url.search;
+    migrated.hash = url.hash;
+    return migrated.toString();
+  } catch {
+    return text;
+  }
+}
+
 function normalizeHttpUrl(value) {
   const text = cleanLine(value);
   if (!text) return '';
@@ -1851,7 +1974,9 @@ function normalizeHttpUrl(value) {
 function verifierCorsHeaders(request) {
   const origin = request.headers.get('Origin') || '';
   const allowed = [
+    'https://shougema.top',
     'https://2fa.aisea.space',
+    'https://2fa.hashkey-eyang.workers.dev',
     'http://localhost:8787',
     'http://127.0.0.1:8787'
   ];
@@ -2253,6 +2378,48 @@ function publicTelegramTarget(target) {
   };
 }
 
+function sanitizeContentTemplates(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return { error: '至少需要保留一个内容模板。', templates: [] };
+  }
+  if (value.length > 30) {
+    return { error: '内容模板最多保存 30 个。', templates: [] };
+  }
+
+  const templates = [];
+  const seenIds = new Set();
+  for (let index = 0; index < value.length; index += 1) {
+    const input = value[index] || {};
+    const fallbackId = `template-${index + 1}`;
+    const id = cleanLine(input.id || fallbackId).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80) || fallbackId;
+    if (seenIds.has(id)) return { error: `内容模板 ID 重复：${id}`, templates: [] };
+    seenIds.add(id);
+
+    const scene = CONTENT_TEMPLATE_SCENES.has(input.scene) ? input.scene : 'googleDeveloper';
+    const fields = [];
+    const seenFields = new Set();
+    if (Array.isArray(input.fields)) {
+      for (const rawField of input.fields) {
+        const field = cleanLine(rawField);
+        if (!CONTENT_TEMPLATE_FIELDS.has(field) || seenFields.has(field)) continue;
+        seenFields.add(field);
+        fields.push(field);
+      }
+    }
+
+    templates.push({
+      id,
+      name: cleanLine(input.name).slice(0, 80) || `内容模板 ${index + 1}`,
+      scene,
+      fields,
+      format: String(input.format || '').slice(0, 10000),
+      active: Boolean(input.active)
+    });
+  }
+
+  return { templates };
+}
+
 async function readJson(request) {
   try {
     return await request.json();
@@ -2382,7 +2549,7 @@ function sanitizeProduct(input, id) {
     googleAuth: cleanLine(input.googleAuth),
     securityCode: cleanLine(input.securityCode),
     phoneSmsCode: cleanLine(input.phoneSmsCode),
-    verifierLinkUrl: cleanLine(input.verifierLinkUrl),
+    verifierLinkUrl: migrateVerifierLinkUrl(input.verifierLinkUrl),
     smsLink: cleanLine(input.smsLink),
     vpsIp: cleanLine(input.vpsIp),
     vpsRemoteUrl: cleanLine(input.vpsRemoteUrl),
