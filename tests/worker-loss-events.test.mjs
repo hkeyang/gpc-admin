@@ -187,3 +187,39 @@ test('站斧 ID 会随客户保存，并且填写时保持唯一', async () => {
   assert.equal(duplicate.status, 409);
   assert.match(duplicate.data.message, /站斧 ID 已存在/);
 });
+
+test('产品遗留失效客户 ID 时，按销售快照重新绑定现有客户', async () => {
+  const customer = {
+    id: 'customer-current',
+    zhanfuId: 'ZF-36',
+    zhanfuUsername: '武汉市跃文',
+    zhanfuPhone: '13800138036',
+    status: 'active',
+    remark: '',
+    createdAt: '2026-07-23T00:00:00.000Z',
+    updatedAt: '2026-07-23T00:00:00.000Z'
+  };
+  const staleProduct = product(36, {
+    salesCustomerId: 'customer-deleted',
+    salesCustomerSnapshot: {
+      id: 'customer-deleted',
+      zhanfuId: 'ZF-36',
+      zhanfuUsername: '武汉市跃文',
+      zhanfuPhone: '13800138036'
+    }
+  });
+  const storage = new MemoryStorage([
+    ['product:36', staleProduct],
+    ['sales_customer:customer-current', customer]
+  ]);
+  const store = new AuthStore({ storage }, {});
+
+  const saved = await call(store, '/products/36', 'PUT', {
+    salesCustomerId: 'customer-deleted',
+    salesCustomerSnapshot: staleProduct.salesCustomerSnapshot
+  });
+
+  assert.equal(saved.status, 200);
+  assert.equal(saved.data.product.salesCustomerId, 'customer-current');
+  assert.equal(saved.data.product.salesCustomerSnapshot.zhanfuUsername, '武汉市跃文');
+});

@@ -580,6 +580,24 @@ export class AuthStore {
     return null;
   }
 
+  async findSalesCustomerBySnapshot(snapshot) {
+    const profile = sanitizeSalesCustomerSnapshot(snapshot);
+    if (!profile) return null;
+
+    if (profile.zhanfuId) {
+      const matchedByZhanfuId = await this.findSalesCustomerByUnique('zhanfuId', profile.zhanfuId);
+      if (matchedByZhanfuId) return matchedByZhanfuId;
+    }
+    if (profile.zhanfuUsername) {
+      const matchedByUsername = await this.findSalesCustomerByUnique('username', profile.zhanfuUsername);
+      if (matchedByUsername) return matchedByUsername;
+    }
+    if (profile.zhanfuPhone) {
+      return this.findSalesCustomerByUnique('phone', profile.zhanfuPhone);
+    }
+    return null;
+  }
+
   async saveSalesCustomer(input, fixedId) {
     const customer = sanitizeSalesCustomer(input, fixedId || input.id || crypto.randomUUID());
     if (!customer.zhanfuUsername) return { error: '请填写站斧用户名' };
@@ -705,7 +723,8 @@ export class AuthStore {
     const customerId = normalizeSalesCustomerId(input.salesCustomerId || product.salesCustomerId);
     if (!customerId) return product;
 
-    const customer = await this.findSalesCustomer(customerId);
+    const customer = await this.findSalesCustomer(customerId)
+      || await this.findSalesCustomerBySnapshot(input.salesCustomerSnapshot || product.salesCustomerSnapshot);
     if (!customer) throw new Error('销售对象不存在，请重新选择。');
     return {
       ...product,
