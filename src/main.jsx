@@ -1209,6 +1209,7 @@ function normalizeSalesCustomerPhone(value) {
 function normalizeSalesCustomer(customer = {}) {
   return {
     id: String(customer.id || '').trim(),
+    zhanfuId: String(customer.zhanfuId || '').trim(),
     zhanfuUsername: String(customer.zhanfuUsername || '').trim(),
     zhanfuPhone: String(customer.zhanfuPhone || '').trim(),
     status: customer.status === 'disabled' ? 'disabled' : 'active',
@@ -1231,6 +1232,7 @@ function salesCustomerSnapshot(product = {}, customers = []) {
   const snapshot = product.salesCustomerSnapshot || {};
   return normalizeSalesCustomer({
     id: product.salesCustomerId || snapshot.id,
+    zhanfuId: snapshot.zhanfuId,
     zhanfuUsername: snapshot.zhanfuUsername,
     zhanfuPhone: snapshot.zhanfuPhone,
     status: 'active'
@@ -1246,7 +1248,9 @@ function filterSalesCustomers(customers = [], keyword = '', { includeDisabled = 
     if (!query) return true;
     const username = normalizeSalesCustomerUsername(item.zhanfuUsername);
     const phone = normalizeSalesCustomerPhone(item.zhanfuPhone);
+    const zhanfuId = String(item.zhanfuId || '').trim().toLowerCase();
     return username.includes(query)
+      || zhanfuId.includes(query)
       || phone.includes(phoneQuery)
       || (phoneQuery.length >= 2 && phone.endsWith(phoneQuery));
   });
@@ -3094,6 +3098,7 @@ function ProductAccountPicker({
       product.saleTime,
       customer?.zhanfuUsername,
       customer?.zhanfuPhone,
+      customer?.zhanfuId,
       businessTypeConfig(productBusinessType(product)).label
     ].some((value) => String(value || '').toLowerCase().includes(normalizedQuery));
   });
@@ -3559,7 +3564,7 @@ function SalesCustomersPage({ customers, products, loading, saving, onSaveCustom
   const [keyword, setKeyword] = useState('');
   const [showDisabled, setShowDisabled] = useState(false);
   const [activeId, setActiveId] = useState(customers[0]?.id || '');
-  const [draft, setDraft] = useState({ id: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+  const [draft, setDraft] = useState({ id: '', zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
   const [notice, setNotice] = useState('');
   const visibleCustomers = filterSalesCustomers(customers, keyword, { includeDisabled: showDisabled, limit: 200 });
   const activeCustomer = customers.find((item) => item.id === activeId) || visibleCustomers[0] || null;
@@ -3579,14 +3584,14 @@ function SalesCustomersPage({ customers, products, loading, saving, onSaveCustom
     if (activeCustomer) {
       setDraft(activeCustomer);
     } else {
-      setDraft({ id: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+      setDraft({ id: '', zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
     }
     setNotice('');
   }, [activeCustomer?.id]);
 
   const startNew = () => {
     setActiveId('');
-    setDraft({ id: `draft-customer-${Date.now()}`, zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+    setDraft({ id: `draft-customer-${Date.now()}`, zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
     setNotice('');
   };
 
@@ -3621,7 +3626,7 @@ function SalesCustomersPage({ customers, products, loading, saving, onSaveCustom
           <div className="customer-list-tools">
             <div className="search-box">
               <Search size={14} />
-              <input value={keyword} placeholder="搜索站斧用户名 / 手机号" onChange={(event) => setKeyword(event.target.value)} />
+              <input value={keyword} placeholder="搜索站斧 ID / 用户名 / 手机号" onChange={(event) => setKeyword(event.target.value)} />
             </div>
             <label className="checkbox-chip compact">
               <input type="checkbox" checked={showDisabled} onChange={(event) => setShowDisabled(event.target.checked)} />
@@ -3632,15 +3637,16 @@ function SalesCustomersPage({ customers, products, loading, saving, onSaveCustom
             {visibleCustomers.map((customer) => (
               <button key={customer.id} type="button" className={customer.id === activeCustomer?.id ? 'active' : ''} onClick={() => setActiveId(customer.id)}>
                 <strong>{customer.zhanfuUsername}</strong>
-                <span>{customer.zhanfuPhone}</span>
+                <span>{customer.zhanfuId ? `ID ${customer.zhanfuId} · ${customer.zhanfuPhone}` : customer.zhanfuPhone}</span>
                 <StatusBadge label={customer.status === 'disabled' ? '已停用' : '正常'} />
               </button>
             ))}
-            {!visibleCustomers.length && <EmptyState icon={Search} title="没有匹配客户" text="换一个站斧用户名或手机号继续搜索。" />}
+            {!visibleCustomers.length && <EmptyState icon={Search} title="没有匹配客户" text="换一个站斧 ID、用户名或手机号继续搜索。" />}
           </div>
         </Panel>
-        <Panel title={draft.id && !String(draft.id).startsWith('draft-customer-') ? '客户资料' : '新增客户'} hint="站斧用户名和站斧手机号均唯一">
+        <Panel title={draft.id && !String(draft.id).startsWith('draft-customer-') ? '客户资料' : '新增客户'} hint="用户名、手机号均唯一；站斧 ID 可选且唯一">
           <div className="customer-editor">
+            <Input label="站斧 ID" value={draft.zhanfuId || ''} onChange={(value) => setDraft({ ...draft, zhanfuId: value })} />
             <Input label="站斧用户名" value={draft.zhanfuUsername} onChange={(value) => setDraft({ ...draft, zhanfuUsername: value })} />
             <Input label="站斧手机号" value={draft.zhanfuPhone} onChange={(value) => setDraft({ ...draft, zhanfuPhone: value })} />
             <Textarea label="备注" value={draft.remark || ''} onChange={(value) => setDraft({ ...draft, remark: value })} />
@@ -3927,7 +3933,7 @@ function SalesCustomerPicker({ product, customers = [], onSelect, onCreate }) {
   const hasSelected = Boolean(product.salesCustomerId && (selected.zhanfuUsername || selected.zhanfuPhone));
   const [keyword, setKeyword] = useState('');
   const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState({ zhanfuUsername: '', zhanfuPhone: '' });
+  const [draft, setDraft] = useState({ zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '' });
   const [message, setMessage] = useState('');
   const matches = filterSalesCustomers(customers, keyword, { limit: 10 });
 
@@ -3935,16 +3941,17 @@ function SalesCustomerPicker({ product, customers = [], onSelect, onCreate }) {
     setMessage('');
     const zhanfuUsername = draft.zhanfuUsername.trim() || keyword.trim();
     const zhanfuPhone = draft.zhanfuPhone.trim();
+    const zhanfuId = draft.zhanfuId.trim();
     if (!zhanfuUsername || !zhanfuPhone) {
       setMessage('站斧用户名和站斧手机号都必填。');
       return;
     }
-    const result = await onCreate?.({ zhanfuUsername, zhanfuPhone, status: 'active' });
+    const result = await onCreate?.({ zhanfuId, zhanfuUsername, zhanfuPhone, status: 'active' });
     if (!result?.ok) {
       if (result?.customer?.id) {
         onSelect?.(result.customer);
         setKeyword('');
-        setDraft({ zhanfuUsername: '', zhanfuPhone: '' });
+        setDraft({ zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '' });
         setCreating(false);
       }
       setMessage(result?.message || '客户创建失败。');
@@ -3952,7 +3959,7 @@ function SalesCustomerPicker({ product, customers = [], onSelect, onCreate }) {
     }
     onSelect?.(result.customer);
     setKeyword('');
-    setDraft({ zhanfuUsername: '', zhanfuPhone: '' });
+    setDraft({ zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '' });
     setCreating(false);
   };
 
@@ -3963,34 +3970,35 @@ function SalesCustomerPicker({ product, customers = [], onSelect, onCreate }) {
         <div className="selected-customer">
           <div>
             <strong>{selected.zhanfuUsername}</strong>
-            <span>{selected.zhanfuPhone}</span>
+            <span>{selected.zhanfuId ? `ID ${selected.zhanfuId} · ${selected.zhanfuPhone}` : selected.zhanfuPhone}</span>
           </div>
-          <button type="button" onClick={() => onSelect?.({ id: '', zhanfuUsername: '', zhanfuPhone: '' })}>更换</button>
+          <button type="button" onClick={() => onSelect?.({ id: '', zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '' })}>更换</button>
         </div>
       ) : (
         <div className="customer-search-box">
           <div className="search-box">
             <Search size={14} />
-            <input value={keyword} placeholder="搜索站斧用户名 / 站斧手机号" onChange={(event) => setKeyword(event.target.value)} />
+            <input value={keyword} placeholder="搜索站斧 ID / 用户名 / 手机号" onChange={(event) => setKeyword(event.target.value)} />
           </div>
           <div className="customer-suggestions">
             {matches.map((customer) => (
               <button key={customer.id} type="button" onClick={() => onSelect?.(customer)}>
                 <strong>{customer.zhanfuUsername}</strong>
-                <span>{customer.zhanfuPhone}</span>
+                <span>{customer.zhanfuId ? `ID ${customer.zhanfuId} · ${customer.zhanfuPhone}` : customer.zhanfuPhone}</span>
               </button>
             ))}
             {keyword && matches.length === 0 && <div className="suggestion-empty">没有匹配客户</div>}
           </div>
           {!creating ? (
             <button className="link-button customer-create-toggle" type="button" onClick={() => {
-              setDraft({ zhanfuUsername: keyword.trim(), zhanfuPhone: '' });
+              setDraft({ zhanfuId: '', zhanfuUsername: keyword.trim(), zhanfuPhone: '' });
               setCreating(true);
             }}>
               <Plus size={14} />新建销售对象
             </button>
           ) : (
             <div className="customer-create-inline">
+              <input value={draft.zhanfuId} placeholder="站斧 ID（可选）" onChange={(event) => setDraft({ ...draft, zhanfuId: event.target.value })} />
               <input value={draft.zhanfuUsername} placeholder="站斧用户名" onChange={(event) => setDraft({ ...draft, zhanfuUsername: event.target.value })} />
               <input value={draft.zhanfuPhone} placeholder="站斧手机号" onChange={(event) => setDraft({ ...draft, zhanfuPhone: event.target.value })} />
               <button type="button" onClick={createCustomer}>创建</button>
@@ -4650,6 +4658,7 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
                   salesCustomerId: customer.id,
                   salesCustomerSnapshot: {
                     id: customer.id,
+                    zhanfuId: customer.zhanfuId,
                     zhanfuUsername: customer.zhanfuUsername,
                     zhanfuPhone: customer.zhanfuPhone,
                     capturedAt: new Date().toISOString()

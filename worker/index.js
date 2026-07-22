@@ -561,7 +561,9 @@ export class AuthStore {
   async findSalesCustomerByUnique(field, value, excludeId = '') {
     const needle = field === 'phone'
       ? normalizeSalesCustomerPhone(value)
-      : normalizeSalesCustomerUsername(value);
+      : field === 'zhanfuId'
+        ? normalizeSalesCustomerZhanfuId(value)
+        : normalizeSalesCustomerUsername(value);
     if (!needle) return null;
     const entries = await this.state.storage.list({ prefix: 'sales_customer:' });
     const excluded = normalizeSalesCustomerId(excludeId);
@@ -570,7 +572,9 @@ export class AuthStore {
       if (excluded && normalized.id === excluded) continue;
       const candidate = field === 'phone'
         ? normalizeSalesCustomerPhone(normalized.zhanfuPhone)
-        : normalizeSalesCustomerUsername(normalized.zhanfuUsername);
+        : field === 'zhanfuId'
+          ? normalizeSalesCustomerZhanfuId(normalized.zhanfuId)
+          : normalizeSalesCustomerUsername(normalized.zhanfuUsername);
       if (candidate === needle) return normalized;
     }
     return null;
@@ -588,6 +592,12 @@ export class AuthStore {
     const phoneDuplicate = await this.findSalesCustomerByUnique('phone', customer.zhanfuPhone, customer.id);
     if (phoneDuplicate) {
       return { error: '站斧手机号已存在，请选择已有客户。', status: 409, customer: phoneDuplicate };
+    }
+    if (customer.zhanfuId) {
+      const idDuplicate = await this.findSalesCustomerByUnique('zhanfuId', customer.zhanfuId, customer.id);
+      if (idDuplicate) {
+        return { error: '站斧 ID 已存在，请选择已有客户。', status: 409, customer: idDuplicate };
+      }
     }
 
     const existing = await this.state.storage.get(`sales_customer:${customer.id}`);
@@ -2594,6 +2604,7 @@ function sanitizeSalesCustomer(input = {}, fixedId = '') {
   const now = new Date().toISOString();
   return {
     id: normalizeSalesCustomerId(fixedId || input.id || crypto.randomUUID()),
+    zhanfuId: cleanLine(input.zhanfuId).slice(0, 80),
     zhanfuUsername: cleanLine(input.zhanfuUsername).slice(0, 80),
     zhanfuPhone: cleanLine(input.zhanfuPhone).slice(0, 40),
     status: input.status === 'disabled' ? 'disabled' : 'active',
@@ -2605,11 +2616,13 @@ function sanitizeSalesCustomer(input = {}, fixedId = '') {
 
 function sanitizeSalesCustomerSnapshot(input = {}) {
   if (!input) return null;
+  const zhanfuId = cleanLine(input.zhanfuId).slice(0, 80);
   const zhanfuUsername = cleanLine(input.zhanfuUsername).slice(0, 80);
   const zhanfuPhone = cleanLine(input.zhanfuPhone).slice(0, 40);
   if (!zhanfuUsername && !zhanfuPhone) return null;
   return {
     id: normalizeSalesCustomerId(input.id),
+    zhanfuId,
     zhanfuUsername,
     zhanfuPhone,
     capturedAt: cleanLine(input.capturedAt) || new Date().toISOString()
@@ -2619,6 +2632,7 @@ function sanitizeSalesCustomerSnapshot(input = {}) {
 function salesCustomerSnapshot(customer) {
   return {
     id: customer.id,
+    zhanfuId: customer.zhanfuId,
     zhanfuUsername: customer.zhanfuUsername,
     zhanfuPhone: customer.zhanfuPhone,
     capturedAt: new Date().toISOString()
@@ -2900,6 +2914,10 @@ function normalizeProductId(value) {
 
 function normalizeSalesCustomerId(value) {
   return cleanLine(value).slice(0, 80);
+}
+
+function normalizeSalesCustomerZhanfuId(value) {
+  return cleanLine(value).toLowerCase();
 }
 
 function normalizeSalesCustomerUsername(value) {

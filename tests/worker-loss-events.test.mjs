@@ -167,3 +167,23 @@ test('读取空异常账本不会改写任何现有产品', async () => {
   assert.deepEqual(result.data.events, []);
   assert.deepEqual(await storage.get('product:9'), before);
 });
+
+test('站斧 ID 会随客户保存，并且填写时保持唯一', async () => {
+  const store = new AuthStore({ storage: new MemoryStorage() }, {});
+
+  const created = await call(store, '/sales-customers', 'POST', {
+    zhanfuId: 'ZF-2026-001',
+    zhanfuUsername: '客户A',
+    zhanfuPhone: '13800138000'
+  });
+  assert.equal(created.status, 201);
+  assert.equal(created.data.customer.zhanfuId, 'ZF-2026-001');
+
+  const duplicate = await call(store, '/sales-customers', 'POST', {
+    zhanfuId: 'zf-2026-001',
+    zhanfuUsername: '客户B',
+    zhanfuPhone: '13900139000'
+  });
+  assert.equal(duplicate.status, 409);
+  assert.match(duplicate.data.message, /站斧 ID 已存在/);
+});
