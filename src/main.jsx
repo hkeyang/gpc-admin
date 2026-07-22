@@ -2092,7 +2092,7 @@ function LoginPage({ deviceId, pendingRequestId, onLogin, onCheckApproval }) {
     <main className="login-page">
       <section className="login-card">
         <div className="login-brand">
-          <img className="brand-logo" src="/admin-icon.png" alt="GPC 管理" />
+          <img className="brand-logo" src="/admin-icon.svg" alt="GPC 管理" />
           <div>
             <strong>GPC管理</strong>
             <p>轻量产品管理平台</p>
@@ -2163,7 +2163,7 @@ function Sidebar({ current, onChange, user, pendingLoginCount, products = [], ac
   return (
     <aside className="sidebar">
       <div className="brand">
-        <img className="brand-logo" src="/admin-icon.png" alt="GPC 管理" />
+        <img className="brand-logo" src="/admin-icon.svg" alt="GPC 管理" />
         <div>
           <strong>GPC管理</strong>
           <p>轻量产品管理平台</p>
