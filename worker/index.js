@@ -543,8 +543,8 @@ export class AuthStore {
 
   async listSalesCustomers() {
     const entries = await this.state.storage.list({ prefix: 'sales_customer:' });
-    return [...entries.values()]
-      .map(sanitizeSalesCustomer)
+    return [...entries.entries()]
+      .map(([key, customer]) => sanitizeSalesCustomer(customer, String(key).slice('sales_customer:'.length)))
       .sort((a, b) => {
         if (a.status !== b.status) return a.status === 'active' ? -1 : 1;
         return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
@@ -567,8 +567,8 @@ export class AuthStore {
     if (!needle) return null;
     const entries = await this.state.storage.list({ prefix: 'sales_customer:' });
     const excluded = normalizeSalesCustomerId(excludeId);
-    for (const customer of entries.values()) {
-      const normalized = sanitizeSalesCustomer(customer);
+    for (const [key, customer] of entries) {
+      const normalized = sanitizeSalesCustomer(customer, String(key).slice('sales_customer:'.length));
       if (excluded && normalized.id === excluded) continue;
       const candidate = field === 'phone'
         ? normalizeSalesCustomerPhone(normalized.zhanfuPhone)

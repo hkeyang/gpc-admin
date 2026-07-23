@@ -223,3 +223,27 @@ test('产品遗留失效客户 ID 时，按销售快照重新绑定现有客户'
   assert.equal(saved.data.product.salesCustomerId, 'customer-current');
   assert.equal(saved.data.product.salesCustomerSnapshot.zhanfuUsername, '武汉市跃文');
 });
+
+test('旧客户档案缺少内置 ID 时，列表仍使用存储键中的原始 ID', async () => {
+  const storage = new MemoryStorage([[
+    'sales_customer:legacy-yuewen',
+    {
+      zhanfuUsername: '武汉市跃文',
+      zhanfuPhone: '13800138036',
+      status: 'active',
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-07-01T00:00:00.000Z'
+    }
+  ]]);
+  const store = new AuthStore({ storage }, {});
+
+  const listed = await call(store, '/sales-customers');
+  assert.equal(listed.status, 200);
+  assert.equal(listed.data.customers[0].id, 'legacy-yuewen');
+
+  const saved = await call(store, '/sales-customers/legacy-yuewen', 'PUT', { zhanfuId: 'ZF-36' });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.data.customer.id, 'legacy-yuewen');
+  assert.equal(saved.data.customer.zhanfuId, 'ZF-36');
+  assert.equal((await storage.get('sales_customer:legacy-yuewen')).id, 'legacy-yuewen');
+});
