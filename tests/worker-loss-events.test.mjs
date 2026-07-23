@@ -168,16 +168,18 @@ test('读取空异常账本不会改写任何现有产品', async () => {
   assert.deepEqual(await storage.get('product:9'), before);
 });
 
-test('站斧 ID 会随客户保存，并且填写时保持唯一', async () => {
+test('站斧 ID 与客户简称会随客户保存，并且站斧 ID 保持唯一', async () => {
   const store = new AuthStore({ storage: new MemoryStorage() }, {});
 
   const created = await call(store, '/sales-customers', 'POST', {
     zhanfuId: 'ZF-2026-001',
+    shortName: '客户甲',
     zhanfuUsername: '客户A',
     zhanfuPhone: '13800138000'
   });
   assert.equal(created.status, 201);
   assert.equal(created.data.customer.zhanfuId, 'ZF-2026-001');
+  assert.equal(created.data.customer.shortName, '客户甲');
 
   const duplicate = await call(store, '/sales-customers', 'POST', {
     zhanfuId: 'zf-2026-001',
@@ -192,6 +194,7 @@ test('产品遗留失效客户 ID 时，按销售快照重新绑定现有客户'
   const customer = {
     id: 'customer-current',
     zhanfuId: 'ZF-36',
+    shortName: '跃文',
     zhanfuUsername: '武汉市跃文',
     zhanfuPhone: '13800138036',
     status: 'active',
@@ -221,6 +224,7 @@ test('产品遗留失效客户 ID 时，按销售快照重新绑定现有客户'
 
   assert.equal(saved.status, 200);
   assert.equal(saved.data.product.salesCustomerId, 'customer-current');
+  assert.equal(saved.data.product.salesCustomerSnapshot.shortName, '跃文');
   assert.equal(saved.data.product.salesCustomerSnapshot.zhanfuUsername, '武汉市跃文');
 });
 

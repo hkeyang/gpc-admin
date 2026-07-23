@@ -163,6 +163,65 @@ function businessTypeFromPage(page) {
   return businessTypes.find((item) => item.navId === page)?.id || defaultBusinessType;
 }
 
+function isProductListPage(page) {
+  return businessTypes.some((item) => item.navId === page);
+}
+
+function createProductListViewState(input = {}) {
+  return {
+    keyword: String(input.keyword || ''),
+    availabilityFilter: input.availabilityFilter || '在售列表',
+    saleFilter: input.saleFilter || '全部',
+    paidFilter: input.paidFilter || '全部',
+    settlementFilter: input.settlementFilter || '全部',
+    dateFrom: String(input.dateFrom || ''),
+    dateTo: String(input.dateTo || ''),
+    pageSize: [5, 10, 20].includes(Number(input.pageSize)) ? Number(input.pageSize) : 10,
+    currentPage: Math.max(1, Number(input.currentPage) || 1),
+    scrollY: Math.max(0, Number(input.scrollY) || 0)
+  };
+}
+
+function defaultProductListViewStates() {
+  return Object.fromEntries(businessTypes.map((item) => [item.navId, createProductListViewState()]));
+}
+
+function readAppRoute(hash = window.location.hash) {
+  const raw = String(hash || '').replace(/^#\/?/, '');
+  const [route = 'dashboard', query = ''] = raw.split('?');
+  const page = route === 'products' ? businessTypes[0].navId : route || 'dashboard';
+  return { page, params: new URLSearchParams(query) };
+}
+
+function productListViewStateFromParams(params = new URLSearchParams()) {
+  return createProductListViewState({
+    keyword: params.get('q') || '',
+    availabilityFilter: params.get('inventory') || '在售列表',
+    saleFilter: params.get('sale') || '全部',
+    paidFilter: params.get('paid') || '全部',
+    settlementFilter: params.get('settlement') || '全部',
+    dateFrom: params.get('from') || '',
+    dateTo: params.get('to') || '',
+    pageSize: params.get('size') || 10,
+    currentPage: params.get('page') || 1
+  });
+}
+
+function productListRoute(page, state = createProductListViewState()) {
+  const params = new URLSearchParams();
+  if (state.keyword) params.set('q', state.keyword);
+  if (state.availabilityFilter !== '在售列表') params.set('inventory', state.availabilityFilter);
+  if (state.saleFilter !== '全部') params.set('sale', state.saleFilter);
+  if (state.paidFilter !== '全部') params.set('paid', state.paidFilter);
+  if (state.settlementFilter !== '全部') params.set('settlement', state.settlementFilter);
+  if (state.dateFrom) params.set('from', state.dateFrom);
+  if (state.dateTo) params.set('to', state.dateTo);
+  if (state.pageSize !== 10) params.set('size', String(state.pageSize));
+  if (state.currentPage !== 1) params.set('page', String(state.currentPage));
+  const query = params.toString();
+  return `#/${page}${query ? `?${query}` : ''}`;
+}
+
 function pushOptionsForType(productType) {
   const allowed = new Set(businessTypeConfig(productType).pushFields);
   return pushFieldOptions.filter((item) => allowed.has(item.key));
@@ -1210,6 +1269,7 @@ function normalizeSalesCustomer(customer = {}) {
   return {
     id: String(customer.id || '').trim(),
     zhanfuId: String(customer.zhanfuId || '').trim(),
+    shortName: String(customer.shortName || '').trim(),
     zhanfuUsername: String(customer.zhanfuUsername || '').trim(),
     zhanfuPhone: String(customer.zhanfuPhone || '').trim(),
     status: customer.status === 'disabled' ? 'disabled' : 'active',
@@ -1233,10 +1293,29 @@ function salesCustomerSnapshot(product = {}, customers = []) {
   return normalizeSalesCustomer({
     id: product.salesCustomerId || snapshot.id,
     zhanfuId: snapshot.zhanfuId,
+    shortName: snapshot.shortName,
     zhanfuUsername: snapshot.zhanfuUsername,
     zhanfuPhone: snapshot.zhanfuPhone,
     status: 'active'
   });
+}
+
+function compactSalesCustomerName(customer = {}) {
+  const manual = String(customer.shortName || '').trim();
+  if (manual) return manual.slice(0, 8);
+
+  const original = String(customer.zhanfuUsername || '').trim();
+  if (!original) return '-';
+  const withoutRegion = original.replace(/^(?:中国)?(?:湖北省)?(?:武汉市?|武汉)/, '');
+  const withoutSuffix = withoutRegion.replace(/(?:有限责任公司|股份有限公司|有限公司|无线网络|信息技术|科技|网络|商贸|供应链|服务中心|工作室)$/u, '');
+  const compact = withoutSuffix || withoutRegion || original;
+  return compact.length > 6 ? `${compact.slice(0, 6)}…` : compact;
+}
+
+function saleTimeLabel(product = {}) {
+  const value = String(product.saleTime || '').replace('T', ' ').trim();
+  if (!value) return '-';
+  return value.length > 16 ? value.slice(0, 16) : value;
 }
 
 function filterSalesCustomers(customers = [], keyword = '', { includeDisabled = false, limit = 10 } = {}) {
@@ -1278,10 +1357,18 @@ function extractAccessPassword(value) {
 }
 
 function App() {
+  const initialRoute = readAppRoute();
   const [page, setPageState] = useState(() => {
-    const hashPage = window.location.hash.replace('#/', '') || 'dashboard';
-    return hashPage === 'products' ? businessTypes[0].navId : hashPage;
+    return initialRoute.page;
   });
+  const [productListViewStates, setProductListViewStates] = useState(() => {
+    const defaults = defaultProductListViewStates();
+    if (isProductListPage(initialRoute.page)) {
+      defaults[initialRoute.page] = productListViewStateFromParams(initialRoute.params);
+    }
+    return defaults;
+  });
+  const [workbenchReturnPage, setWorkbenchReturnPage] = useState('');
   const [products, setProducts] = useState(initialProducts);
   const [salesCustomers, setSalesCustomers] = useState([]);
   const [purchaseExpenses, setPurchaseExpenses] = useState([]);
@@ -1334,8 +1421,14 @@ function App() {
 
   useEffect(() => {
     const handleHashChange = () => {
-      const nextPage = window.location.hash.replace('#/', '') || 'dashboard';
-      setPageState(nextPage === 'products' ? businessTypes[0].navId : nextPage);
+      const nextRoute = readAppRoute();
+      setPageState(nextRoute.page);
+      if (isProductListPage(nextRoute.page)) {
+        setProductListViewStates((current) => ({
+          ...current,
+          [nextRoute.page]: productListViewStateFromParams(nextRoute.params)
+        }));
+      }
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -1459,7 +1552,7 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [pushTemplates, authState.authenticated, isSuperAdmin]);
 
-  const setPage = (nextPage) => {
+  const setPage = (nextPage, { replace = false } = {}) => {
     if (isGoogleDeveloperUser && nextPage !== googleDeveloperPageId) {
       nextPage = googleDeveloperPageId;
     }
@@ -1473,8 +1566,35 @@ function App() {
       nextPage = 'dashboard';
     }
     setPageState(nextPage);
-    window.history.replaceState(null, '', `#/${nextPage}`);
+    const nextHash = isProductListPage(nextPage)
+      ? productListRoute(nextPage, productListViewStates[nextPage])
+      : `#/${nextPage}`;
+    if (window.location.hash !== nextHash) {
+      window.history[replace ? 'replaceState' : 'pushState'](null, '', nextHash);
+    }
   };
+
+  const updateProductListViewState = (listPage, update) => {
+    setProductListViewStates((current) => {
+      const previous = current[listPage] || createProductListViewState();
+      const next = createProductListViewState(typeof update === 'function' ? update(previous) : { ...previous, ...update });
+      return { ...current, [listPage]: next };
+    });
+  };
+
+  const openWorkbench = (id, returnPage = '') => {
+    setActiveId(id);
+    setWorkbenchReturnPage(returnPage || (products.find((item) => item.id === id) ? businessTypeConfig(productBusinessType(products.find((item) => item.id === id))).navId : ''));
+    setPage('workbench');
+  };
+
+  useEffect(() => {
+    if (!isProductListPage(page)) return;
+    const nextHash = productListRoute(page, productListViewStates[page]);
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, '', nextHash);
+    }
+  }, [page, productListViewStates]);
 
   const openPhoneRenewals = (productId = null) => {
     if (!isSuperAdmin) return;
@@ -1662,6 +1782,7 @@ function App() {
     nextProduct.id = `draft-${Date.now()}`;
     setDraftProduct(nextProduct);
     setActiveId(nextProduct.id);
+    setWorkbenchReturnPage(businessTypeConfig(normalizedType).navId);
     setPage('workbench');
   };
 
@@ -1963,21 +2084,23 @@ function App() {
             onSave={saveGoogleDeveloperProduct}
           />
         )}
-        {!isGoogleDeveloperUser && page === 'dashboard' && <Dashboard products={products} lossEvents={lossEvents} exchangeRate={exchangeRate} onOpenProducts={() => setPage(businessTypes[0].navId)} onOpenWorkbench={(id) => { setActiveId(id); setPage('workbench'); }} />}
+        {!isGoogleDeveloperUser && page === 'dashboard' && <Dashboard products={products} lossEvents={lossEvents} exchangeRate={exchangeRate} onOpenProducts={() => setPage(businessTypes[0].navId)} onOpenWorkbench={(id) => openWorkbench(id)} />}
         {!isGoogleDeveloperUser && businessTypes.some((item) => item.navId === page) && (() => {
           const productType = businessTypeFromPage(page);
           const visibleProducts = products.filter((item) => productBusinessType(item) === productType);
           return (
             <ProductsPage
+              key={page}
               productType={productType}
               title={businessTypeConfig(productType).label}
               products={visibleProducts}
               exchangeRate={exchangeRate}
               pushTemplate={listPushTemplate(productType)}
+              viewState={productListViewStates[page]}
+              onViewStateChange={(update) => updateProductListViewState(page, update)}
               onAddProduct={() => addProduct(productType)}
               onOpenWorkbench={(id) => {
-                setActiveId(id);
-                setPage('workbench');
+                openWorkbench(id, page);
               }}
             />
           );
@@ -1991,8 +2114,7 @@ function App() {
             saving={salesCustomerSync.saving}
             onSaveCustomer={saveSalesCustomer}
             onOpenProduct={(id) => {
-              setActiveId(id);
-              setPage('workbench');
+              openWorkbench(id, 'sales-customers');
             }}
           />
         )}
@@ -2023,7 +2145,19 @@ function App() {
         )}
         {purchaseExpenseSync.message && <div className="global-notice"><Info size={15} />{purchaseExpenseSync.message}</div>}
         {!isGoogleDeveloperUser && page === 'workbench' && activeProduct && (
-          <Workbench product={activeProduct} user={currentUser} customers={salesCustomers} onSaveCustomer={saveSalesCustomer} onSave={saveProduct} onSettle={settleProductStatus} onOpenPhoneRenewals={isSuperAdmin ? openPhoneRenewals : undefined} saving={productSync.saving || salesCustomerSync.saving} onAuthExpired={handleAuthExpired} />
+          <Workbench
+            product={activeProduct}
+            user={currentUser}
+            customers={salesCustomers}
+            onSaveCustomer={saveSalesCustomer}
+            onSave={saveProduct}
+            onSettle={settleProductStatus}
+            onOpenPhoneRenewals={isSuperAdmin ? openPhoneRenewals : undefined}
+            onBack={() => setPage(workbenchReturnPage || businessTypeConfig(productBusinessType(activeProduct)).navId)}
+            backLabel={workbenchReturnPage === 'sales-customers' ? '返回客户管理' : `返回${businessTypeConfig(productBusinessType(activeProduct)).label}列表`}
+            saving={productSync.saving || salesCustomerSync.saving}
+            onAuthExpired={handleAuthExpired}
+          />
         )}
         {isSuperAdmin && page === 'push-settings' && (
           <PushSettingsPage
@@ -2534,17 +2668,29 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ productType, products, exchangeRate, pushTemplate, onOpenWorkbench, onAddProduct, title }) {
-  const [keyword, setKeyword] = useState('');
-  const [availabilityFilter, setAvailabilityFilter] = useState('在售列表');
-  const [saleFilter, setSaleFilter] = useState('全部');
-  const [paidFilter, setPaidFilter] = useState('全部');
-  const [settlementFilter, setSettlementFilter] = useState('全部');
-  const [dateFrom, setDateFrom] = useState('');
-  const [dateTo, setDateTo] = useState('');
-  const [pageSize, setPageSize] = useState(10);
-  const [currentPage, setCurrentPage] = useState(1);
+function ProductsPage({ productType, products, exchangeRate, pushTemplate, viewState, onViewStateChange, onOpenWorkbench, onAddProduct, title }) {
+  const listState = createProductListViewState(viewState);
+  const {
+    keyword,
+    availabilityFilter,
+    saleFilter,
+    paidFilter,
+    settlementFilter,
+    dateFrom,
+    dateTo,
+    pageSize,
+    currentPage
+  } = listState;
   const [copyState, setCopyState] = useState({ product: null, content: '', message: '' });
+  const restoredScroll = useRef(false);
+
+  const updateListState = (patch, resetPage = false) => {
+    onViewStateChange?.((current) => ({
+      ...current,
+      ...patch,
+      ...(resetPage ? { currentPage: 1 } : {})
+    }));
+  };
 
   const filteredProducts = useMemo(() => {
     return products.filter((item) => {
@@ -2574,20 +2720,24 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, onOpe
   const todayPaid = todaySold.filter((item) => item.isPaid);
   const unsettledHongKongReceivable = unsettledProducts.reduce((sum, item) => sum + Math.max(settlementAmounts(item).hongKongReceivable, 0), 0);
   useEffect(() => {
-    setCurrentPage(1);
-  }, [keyword, availabilityFilter, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo, pageSize]);
+    if (currentPage > pageCount) updateListState({ currentPage: pageCount });
+  }, [currentPage, pageCount]);
   const resetFilters = () => {
-    setKeyword('');
-    setAvailabilityFilter('在售列表');
-    setSaleFilter('全部');
-    setPaidFilter('全部');
-    setSettlementFilter('全部');
-    setDateFrom('');
-    setDateTo('');
+    onViewStateChange?.(createProductListViewState());
   };
   const previewProductCopy = (product) => {
     setCopyState({ product, content: buildProductPushMessage(product, pushTemplate), message: '' });
   };
+  const openProductWorkbench = (id) => {
+    onViewStateChange?.((current) => ({ ...current, scrollY: window.scrollY }));
+    onOpenWorkbench(id);
+  };
+
+  useEffect(() => {
+    if (restoredScroll.current) return;
+    restoredScroll.current = true;
+    window.requestAnimationFrame(() => window.scrollTo({ top: listState.scrollY, behavior: 'auto' }));
+  }, []);
 
   return (
     <section className="page products-page">
@@ -2602,12 +2752,12 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, onOpe
       <div className="list-layout">
         <Panel className="list-panel">
           <div className="filters">
-            <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="搜索 ID / 账号 / 手机号" /></label>
-            <FilterSelect label="库存状态" value={availabilityFilter} onChange={setAvailabilityFilter} options={['在售列表', '全部', '可出售', '准备中', '暂停出售', '售后补偿', '已损坏', '已售']} />
-            <FilterSelect label="销售状态" value={saleFilter} onChange={setSaleFilter} options={['全部', '待售', '已售']} />
-            <FilterSelect label="回款状态" value={paidFilter} onChange={setPaidFilter} options={['全部', '未回款', '已回款']} />
-            <FilterSelect label="结算状态" value={settlementFilter} onChange={setSettlementFilter} options={['全部', '未结算', '已结算']} />
-            <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
+            <label className="search-box"><Search size={17} /><input value={keyword} onChange={(event) => updateListState({ keyword: event.target.value }, true)} placeholder="搜索 ID / 账号 / 手机号" /></label>
+            <FilterSelect label="库存状态" value={availabilityFilter} onChange={(value) => updateListState({ availabilityFilter: value }, true)} options={['在售列表', '全部', '可出售', '准备中', '暂停出售', '售后补偿', '已损坏', '已售']} />
+            <FilterSelect label="销售状态" value={saleFilter} onChange={(value) => updateListState({ saleFilter: value }, true)} options={['全部', '待售', '已售']} />
+            <FilterSelect label="回款状态" value={paidFilter} onChange={(value) => updateListState({ paidFilter: value }, true)} options={['全部', '未回款', '已回款']} />
+            <FilterSelect label="结算状态" value={settlementFilter} onChange={(value) => updateListState({ settlementFilter: value }, true)} options={['全部', '未结算', '已结算']} />
+            <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={(value) => updateListState({ dateFrom: value }, true)} onToChange={(value) => updateListState({ dateTo: value }, true)} />
             <div className="filters-actions">
               <button className="secondary-button" onClick={resetFilters}>重置</button>
               <button className="primary-button" onClick={onAddProduct}><Plus size={16} /> 新增产品</button>
@@ -2622,22 +2772,22 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, onOpe
             <>
               <ProductTable
                 products={paginatedProducts}
-                onOpenWorkbench={onOpenWorkbench}
+                onOpenWorkbench={openProductWorkbench}
                 onPreviewCopy={previewProductCopy}
               />
               <div className="pagination">
-                <select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                <select value={pageSize} onChange={(event) => updateListState({ pageSize: Number(event.target.value) }, true)}>
                   <option value={5}>5 条/页</option>
                   <option value={10}>10 条/页</option>
                   <option value={20}>20 条/页</option>
                 </select>
                 <span>共 {filteredProducts.length} 条</span>
                 <div className="pager">
-                  <button disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}><ChevronLeft size={16} /></button>
+                  <button disabled={currentPage === 1} onClick={() => updateListState({ currentPage: Math.max(1, currentPage - 1) })}><ChevronLeft size={16} /></button>
                   {Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => (
-                    <button key={page} className={page === currentPage ? 'active' : ''} onClick={() => setCurrentPage(page)}>{page}</button>
+                    <button key={page} className={page === currentPage ? 'active' : ''} onClick={() => updateListState({ currentPage: page })}>{page}</button>
                   ))}
-                  <button disabled={currentPage === pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}><ChevronRight size={16} /></button>
+                  <button disabled={currentPage === pageCount} onClick={() => updateListState({ currentPage: Math.min(pageCount, currentPage + 1) })}><ChevronRight size={16} /></button>
                 </div>
               </div>
             </>
@@ -2703,18 +2853,22 @@ function ProductTable({ products, onOpenWorkbench, onPreviewCopy }) {
     <table className="product-table product-list-table">
       <thead>
         <tr>
-          <th>ID</th><th>上架时间</th><th>账号</th><th>总成本 (USD)</th><th>售价 (USD)</th><th>利润 (USD)</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
+          <th>ID</th><th>上架时间</th><th>售卖时间</th><th>客户</th><th>账号</th><th>总成本</th><th>售价</th><th>利润</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
         {products.map((item) => {
           const cost = sumCosts(item);
           const profit = productProfit(item);
+          const customer = salesCustomerSnapshot(item);
+          const customerName = compactSalesCustomerName(customer);
           return (
             <tr key={item.id}>
               <td>{item.id}</td>
               <td>{productDateValue(item)}</td>
-              <td><CopyableAccountCell value={item.account || item.email} /></td>
+              <td>{saleTimeLabel(item)}</td>
+              <td><span className="customer-list-name" title={customer.zhanfuUsername || ''}>{customerName}</span></td>
+              <td><CopyableAccountCell value={item.account || item.email} compact /></td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
@@ -3564,7 +3718,7 @@ function SalesCustomersPage({ customers, products, loading, saving, onSaveCustom
   const [keyword, setKeyword] = useState('');
   const [showDisabled, setShowDisabled] = useState(false);
   const [activeId, setActiveId] = useState(customers[0]?.id || '');
-  const [draft, setDraft] = useState({ id: '', zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+  const [draft, setDraft] = useState({ id: '', zhanfuId: '', shortName: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
   const [notice, setNotice] = useState('');
   const visibleCustomers = filterSalesCustomers(customers, keyword, { includeDisabled: showDisabled, limit: 200 });
   const activeCustomer = customers.find((item) => item.id === activeId) || visibleCustomers[0] || null;
@@ -3584,14 +3738,14 @@ function SalesCustomersPage({ customers, products, loading, saving, onSaveCustom
     if (activeCustomer) {
       setDraft(activeCustomer);
     } else {
-      setDraft({ id: '', zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+      setDraft({ id: '', zhanfuId: '', shortName: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
     }
     setNotice('');
   }, [activeCustomer?.id]);
 
   const startNew = () => {
     setActiveId('');
-    setDraft({ id: `draft-customer-${Date.now()}`, zhanfuId: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
+    setDraft({ id: `draft-customer-${Date.now()}`, zhanfuId: '', shortName: '', zhanfuUsername: '', zhanfuPhone: '', status: 'active', remark: '' });
     setNotice('');
   };
 
@@ -3647,6 +3801,7 @@ function SalesCustomersPage({ customers, products, loading, saving, onSaveCustom
         <Panel title={draft.id && !String(draft.id).startsWith('draft-customer-') ? '客户资料' : '新增客户'} hint="用户名、手机号均唯一；站斧 ID 可选且唯一">
           <div className="customer-editor">
             <Input label="站斧 ID" value={draft.zhanfuId || ''} onChange={(value) => setDraft({ ...draft, zhanfuId: value })} />
+            <Input label="客户简称（选填）" value={draft.shortName || ''} onChange={(value) => setDraft({ ...draft, shortName: value })} />
             <Input label="站斧用户名" value={draft.zhanfuUsername} onChange={(value) => setDraft({ ...draft, zhanfuUsername: value })} />
             <Input label="站斧手机号" value={draft.zhanfuPhone} onChange={(value) => setDraft({ ...draft, zhanfuPhone: value })} />
             <Textarea label="备注" value={draft.remark || ''} onChange={(value) => setDraft({ ...draft, remark: value })} />
@@ -3896,9 +4051,10 @@ function PhoneRenewalPage({ products, onSaveProduct, saving, targetProductId }) 
   );
 }
 
-function CopyableAccountCell({ value }) {
+function CopyableAccountCell({ value, compact = false }) {
   const [copied, setCopied] = useState(false);
   const text = String(value || '');
+  const displayText = compact && text.length > 5 ? `${text.slice(0, 5)}…` : text;
   const copyAccount = async () => {
     if (!text) return;
     try {
@@ -3911,8 +4067,8 @@ function CopyableAccountCell({ value }) {
   };
 
   return (
-    <span className="copyable-account" title="双击复制邮箱" onDoubleClick={copyAccount}>
-      <span>{text}</span>
+    <span className="copyable-account" title={text ? `完整账号：${text}（双击复制）` : '双击复制账号'} onDoubleClick={copyAccount}>
+      <span>{displayText}</span>
       {copied && <em>已复制</em>}
     </span>
   );
@@ -4012,7 +4168,7 @@ function SalesCustomerPicker({ product, customers = [], onSelect, onCreate }) {
   );
 }
 
-function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSettle, onOpenPhoneRenewals, saving, onAuthExpired }) {
+function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSettle, onOpenPhoneRenewals, onBack, backLabel, saving, onAuthExpired }) {
   const [draft, setDraft] = useState(product);
   const [dirty, setDirty] = useState(false);
   const [visible, setVisible] = useState({});
@@ -4503,6 +4659,7 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
           <strong>{isNewProduct ? `新增${business.label}草稿` : `${business.label} #${draft.id}`}</strong>
           <span>{dirty ? '有未保存改动' : '已保存'}</span>
         </div>
+        <button className="secondary-button workbench-back-button" type="button" onClick={onBack}><ChevronLeft size={16} />{backLabel || '返回列表'}</button>
         <button className="primary-button" type="button" disabled={saving || (!dirty && !isNewProduct)} onClick={saveDraft}>
           <Save size={16} />{saving ? '保存中...' : isNewProduct ? '保存产品' : '保存修改'}
         </button>
@@ -4659,6 +4816,7 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
                   salesCustomerSnapshot: {
                     id: customer.id,
                     zhanfuId: customer.zhanfuId,
+                    shortName: customer.shortName,
                     zhanfuUsername: customer.zhanfuUsername,
                     zhanfuPhone: customer.zhanfuPhone,
                     capturedAt: new Date().toISOString()

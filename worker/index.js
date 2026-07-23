@@ -2624,6 +2624,7 @@ function sanitizeSalesCustomer(input = {}, fixedId = '') {
   return {
     id: normalizeSalesCustomerId(fixedId || input.id || crypto.randomUUID()),
     zhanfuId: cleanLine(input.zhanfuId).slice(0, 80),
+    shortName: cleanLine(input.shortName).slice(0, 40),
     zhanfuUsername: cleanLine(input.zhanfuUsername).slice(0, 80),
     zhanfuPhone: cleanLine(input.zhanfuPhone).slice(0, 40),
     status: input.status === 'disabled' ? 'disabled' : 'active',
@@ -2636,12 +2637,14 @@ function sanitizeSalesCustomer(input = {}, fixedId = '') {
 function sanitizeSalesCustomerSnapshot(input = {}) {
   if (!input) return null;
   const zhanfuId = cleanLine(input.zhanfuId).slice(0, 80);
+  const shortName = cleanLine(input.shortName).slice(0, 40);
   const zhanfuUsername = cleanLine(input.zhanfuUsername).slice(0, 80);
   const zhanfuPhone = cleanLine(input.zhanfuPhone).slice(0, 40);
   if (!zhanfuUsername && !zhanfuPhone) return null;
   return {
     id: normalizeSalesCustomerId(input.id),
     zhanfuId,
+    shortName,
     zhanfuUsername,
     zhanfuPhone,
     capturedAt: cleanLine(input.capturedAt) || new Date().toISOString()
@@ -2652,6 +2655,7 @@ function salesCustomerSnapshot(customer) {
   return {
     id: customer.id,
     zhanfuId: customer.zhanfuId,
+    shortName: customer.shortName,
     zhanfuUsername: customer.zhanfuUsername,
     zhanfuPhone: customer.zhanfuPhone,
     capturedAt: new Date().toISOString()
