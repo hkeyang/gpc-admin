@@ -1313,9 +1313,9 @@ function compactSalesCustomerName(customer = {}) {
 }
 
 function saleTimeLabel(product = {}) {
-  const value = String(product.saleTime || '').replace('T', ' ').trim();
+  const value = String(product.saleTime || '').trim();
   if (!value) return '-';
-  return value.length > 16 ? value.slice(0, 16) : value;
+  return value.slice(0, 10);
 }
 
 function filterSalesCustomers(customers = [], keyword = '', { includeDisabled = false, limit = 10 } = {}) {
