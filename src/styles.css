@@ -810,12 +810,14 @@ nav { display: grid; gap: 8px; }
   padding: 10px 14px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 12px;
 }
 .workbench-toolbar strong { display: block; font-size: 15px; }
 .workbench-toolbar span { display: block; margin-top: 4px; color: #8a95aa; font-size: 12px; font-weight: 800; }
-.workbench-back-button { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.workbench-back-button { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.workbench-title { min-width: 0; }
+.workbench-actions { margin-left: auto; display: inline-flex; }
 .workbench-toolbar .primary-button { min-width: 118px; }
 .workbench-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, 270px); gap: 14px; align-items: start; }
 .workbench-main { display: grid; gap: 12px; }

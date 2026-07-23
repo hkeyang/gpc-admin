@@ -4655,14 +4655,16 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
   return (
     <section className="page workbench-page">
       <div className="workbench-toolbar">
-        <div>
+        <button className="secondary-button workbench-back-button" type="button" onClick={onBack}><ChevronLeft size={16} />{backLabel || '返回列表'}</button>
+        <div className="workbench-title">
           <strong>{isNewProduct ? `新增${business.label}草稿` : `${business.label} #${draft.id}`}</strong>
           <span>{dirty ? '有未保存改动' : '已保存'}</span>
         </div>
-        <button className="secondary-button workbench-back-button" type="button" onClick={onBack}><ChevronLeft size={16} />{backLabel || '返回列表'}</button>
-        <button className="primary-button" type="button" disabled={saving || (!dirty && !isNewProduct)} onClick={saveDraft}>
-          <Save size={16} />{saving ? '保存中...' : isNewProduct ? '保存产品' : '保存修改'}
-        </button>
+        <div className="workbench-actions">
+          <button className="primary-button" type="button" disabled={saving || (!dirty && !isNewProduct)} onClick={saveDraft}>
+            <Save size={16} />{saving ? '保存中...' : isNewProduct ? '保存产品' : '保存修改'}
+          </button>
+        </div>
       </div>
       <div className="workbench-grid">
         <div className="workbench-main">
