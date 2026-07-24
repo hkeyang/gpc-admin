@@ -168,12 +168,15 @@ function isProductListPage(page) {
 }
 
 function createProductListViewState(input = {}) {
+  const saleTimeSort = ['default', 'latest', 'earliest'].includes(input.saleTimeSort) ? input.saleTimeSort : 'default';
   return {
     keyword: String(input.keyword || ''),
     availabilityFilter: input.availabilityFilter || '在售列表',
     saleFilter: input.saleFilter || '全部',
     paidFilter: input.paidFilter || '全部',
     settlementFilter: input.settlementFilter || '全部',
+    customerFilter: String(input.customerFilter || ''),
+    saleTimeSort,
     dateFrom: String(input.dateFrom || ''),
     dateTo: String(input.dateTo || ''),
     pageSize: [5, 10, 20].includes(Number(input.pageSize)) ? Number(input.pageSize) : 10,
@@ -200,6 +203,8 @@ function productListViewStateFromParams(params = new URLSearchParams()) {
     saleFilter: params.get('sale') || '全部',
     paidFilter: params.get('paid') || '全部',
     settlementFilter: params.get('settlement') || '全部',
+    customerFilter: params.get('customer') || '',
+    saleTimeSort: params.get('saleSort') || 'default',
     dateFrom: params.get('from') || '',
     dateTo: params.get('to') || '',
     pageSize: params.get('size') || 10,
@@ -214,6 +219,8 @@ function productListRoute(page, state = createProductListViewState()) {
   if (state.saleFilter !== '全部') params.set('sale', state.saleFilter);
   if (state.paidFilter !== '全部') params.set('paid', state.paidFilter);
   if (state.settlementFilter !== '全部') params.set('settlement', state.settlementFilter);
+  if (state.customerFilter) params.set('customer', state.customerFilter);
+  if (state.saleTimeSort !== 'default') params.set('saleSort', state.saleTimeSort);
   if (state.dateFrom) params.set('from', state.dateFrom);
   if (state.dateTo) params.set('to', state.dateTo);
   if (state.pageSize !== 10) params.set('size', String(state.pageSize));
@@ -1300,6 +1307,38 @@ function salesCustomerSnapshot(product = {}, customers = []) {
   });
 }
 
+function productMatchesSalesCustomer(product, customerId, customers = []) {
+  if (!customerId) return true;
+  const snapshot = salesCustomerSnapshot(product, customers);
+  const hasCustomer = Boolean(product.salesCustomerId || snapshot.id || snapshot.zhanfuUsername || snapshot.zhanfuPhone);
+  if (customerId === '__unassigned__') return !hasCustomer;
+  if (String(product.salesCustomerId || '') === customerId || String(snapshot.id || '') === customerId) return true;
+
+  const selected = customers.find((item) => String(item.id) === customerId);
+  if (!selected) return false;
+  const sameZhanfuId = selected.zhanfuId && snapshot.zhanfuId
+    && String(selected.zhanfuId).trim().toLowerCase() === String(snapshot.zhanfuId).trim().toLowerCase();
+  const sameUsernameAndPhone = selected.zhanfuUsername && selected.zhanfuPhone
+    && String(selected.zhanfuUsername).trim().toLowerCase() === String(snapshot.zhanfuUsername || '').trim().toLowerCase()
+    && normalizeSalesCustomerPhone(selected.zhanfuPhone) === normalizeSalesCustomerPhone(snapshot.zhanfuPhone);
+  return Boolean(sameZhanfuId || sameUsernameAndPhone);
+}
+
+function sortProductsBySaleTime(products = [], sort = 'default') {
+  if (sort === 'default') return products;
+  return [...products].sort((left, right) => {
+    const leftDate = left.isSold ? String(left.saleTime || '').trim() : '';
+    const rightDate = right.isSold ? String(right.saleTime || '').trim() : '';
+    const leftGroup = leftDate ? 0 : left.isSold ? 1 : 2;
+    const rightGroup = rightDate ? 0 : right.isSold ? 1 : 2;
+    if (leftGroup !== rightGroup) return leftGroup - rightGroup;
+    if (leftDate !== rightDate) return sort === 'latest'
+      ? rightDate.localeCompare(leftDate)
+      : leftDate.localeCompare(rightDate);
+    return compareNaturalIds(right.id, left.id);
+  });
+}
+
 function compactSalesCustomerName(customer = {}) {
   const manual = String(customer.shortName || '').trim();
   if (manual) return manual.slice(0, 4);
@@ -2094,6 +2133,7 @@ function App() {
               productType={productType}
               title={businessTypeConfig(productType).label}
               products={visibleProducts}
+              customers={salesCustomers}
               exchangeRate={exchangeRate}
               pushTemplate={listPushTemplate(productType)}
               viewState={productListViewStates[page]}
@@ -2668,7 +2708,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ productType, products, exchangeRate, pushTemplate, viewState, onViewStateChange, onOpenWorkbench, onAddProduct, title }) {
+function ProductsPage({ productType, products, customers = [], exchangeRate, pushTemplate, viewState, onViewStateChange, onOpenWorkbench, onAddProduct, title }) {
   const listState = createProductListViewState(viewState);
   const {
     keyword,
@@ -2676,6 +2716,8 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, viewS
     saleFilter,
     paidFilter,
     settlementFilter,
+    customerFilter,
+    saleTimeSort,
     dateFrom,
     dateTo,
     pageSize,
@@ -2692,8 +2734,29 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, viewS
     }));
   };
 
+  const customerFilterOptions = useMemo(() => {
+    const customerRows = new Map();
+    products.forEach((product) => {
+      const customer = salesCustomerSnapshot(product, customers);
+      const id = String(product.salesCustomerId || customer.id || '').trim();
+      const name = String(customer.zhanfuUsername || customer.shortName || '').trim();
+      if (id && name && !customerRows.has(id)) {
+        customerRows.set(id, { value: id, label: name, zhanfuId: customer.zhanfuId });
+      }
+    });
+    const rows = [...customerRows.values()].sort((left, right) => left.label.localeCompare(right.label, 'zh-CN'));
+    const duplicateNames = rows.reduce((counts, item) => ({ ...counts, [item.label]: (counts[item.label] || 0) + 1 }), {});
+    const options = [{ value: '', label: '全部客户' }, ...rows.map((item) => ({
+      value: item.value,
+      label: duplicateNames[item.label] > 1 ? `${item.label} · ${item.zhanfuId || item.value}` : item.label
+    }))];
+    const hasUnassigned = products.some((product) => !salesCustomerSnapshot(product, customers).zhanfuUsername && !salesCustomerSnapshot(product, customers).zhanfuPhone);
+    if (hasUnassigned) options.push({ value: '__unassigned__', label: '未登记客户' });
+    return options;
+  }, [products, customers]);
+
   const filteredProducts = useMemo(() => {
-    return products.filter((item) => {
+    const matched = products.filter((item) => {
       const keywordText = [item.id, item.account, item.phone].join(' ').toLowerCase();
       const matchesKeyword = keywordText.includes(keyword.toLowerCase());
       const availabilityLabel = availabilityStatusLabel(item);
@@ -2705,9 +2768,11 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, viewS
       const createdDate = productDateValue(item);
       const matchesDateFrom = !dateFrom || createdDate >= dateFrom;
       const matchesDateTo = !dateTo || createdDate <= dateTo;
-      return matchesKeyword && matchesAvailability && matchesSale && matchesPaid && matchesSettlement && matchesDateFrom && matchesDateTo;
+      const matchesCustomer = productMatchesSalesCustomer(item, customerFilter, customers);
+      return matchesKeyword && matchesAvailability && matchesSale && matchesPaid && matchesSettlement && matchesCustomer && matchesDateFrom && matchesDateTo;
     });
-  }, [products, keyword, availabilityFilter, saleFilter, paidFilter, settlementFilter, dateFrom, dateTo]);
+    return sortProductsBySaleTime(matched, saleTimeSort);
+  }, [products, customers, keyword, availabilityFilter, saleFilter, paidFilter, settlementFilter, customerFilter, saleTimeSort, dateFrom, dateTo]);
   const pageCount = Math.max(1, Math.ceil(filteredProducts.length / pageSize));
   const paginatedProducts = filteredProducts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const today = localDateInput();
@@ -2757,7 +2822,8 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, viewS
             <FilterSelect label="销售状态" value={saleFilter} onChange={(value) => updateListState({ saleFilter: value }, true)} options={['全部', '待售', '已售']} />
             <FilterSelect label="回款状态" value={paidFilter} onChange={(value) => updateListState({ paidFilter: value }, true)} options={['全部', '未回款', '已回款']} />
             <FilterSelect label="结算状态" value={settlementFilter} onChange={(value) => updateListState({ settlementFilter: value }, true)} options={['全部', '未结算', '已结算']} />
-            <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={(value) => updateListState({ dateFrom: value }, true)} onToChange={(value) => updateListState({ dateTo: value }, true)} />
+            <FilterSelect label="客户" value={customerFilter} onChange={(value) => updateListState({ customerFilter: value }, true)} options={customerFilterOptions} />
+            <CollapsibleDateRangeFilter from={dateFrom} to={dateTo} onFromChange={(value) => updateListState({ dateFrom: value }, true)} onToChange={(value) => updateListState({ dateTo: value }, true)} onClear={() => updateListState({ dateFrom: '', dateTo: '' }, true)} />
             <div className="filters-actions">
               <button className="secondary-button" onClick={resetFilters}>重置</button>
               <button className="primary-button" onClick={onAddProduct}><Plus size={16} /> 新增产品</button>
@@ -2772,6 +2838,8 @@ function ProductsPage({ productType, products, exchangeRate, pushTemplate, viewS
             <>
               <ProductTable
                 products={paginatedProducts}
+                saleTimeSort={saleTimeSort}
+                onSaleTimeSortChange={() => updateListState({ saleTimeSort: saleTimeSort === 'default' ? 'latest' : saleTimeSort === 'latest' ? 'earliest' : 'default' }, true)}
                 onOpenWorkbench={openProductWorkbench}
                 onPreviewCopy={previewProductCopy}
               />
@@ -2819,9 +2887,45 @@ function FilterSelect({ label, value, onChange, options }) {
     <label className="filter-select">
       <span>{label}</span>
       <select value={value} onChange={(event) => onChange(event.target.value)}>
-        {options.map((option) => <option key={option}>{option}</option>)}
+        {options.map((option) => {
+          const item = typeof option === 'string' ? { value: option, label: option } : option;
+          return <option key={item.value} value={item.value}>{item.label}</option>;
+        })}
       </select>
     </label>
+  );
+}
+
+function CollapsibleDateRangeFilter({ from, to, onFromChange, onToChange, onClear }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const dateLabel = from || to ? `${compactDateLabel(from, '开始')} ~ ${compactDateLabel(to, '结束')}` : '不限';
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const closeWhenOutside = (event) => {
+      if (!rootRef.current?.contains(event.target)) setOpen(false);
+    };
+    window.addEventListener('pointerdown', closeWhenOutside);
+    return () => window.removeEventListener('pointerdown', closeWhenOutside);
+  }, [open]);
+
+  return (
+    <div className="date-filter compact-date-filter" ref={rootRef}>
+      <button className="date-filter-trigger" type="button" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
+        <Calendar size={14} />
+        <span>上架时间</span>
+        <em>{dateLabel}</em>
+        <ChevronDown size={14} />
+      </button>
+      {open && (
+        <div className="date-filter-popover">
+          <label>开始<input aria-label="开始日期" type="date" value={from} max={to || undefined} onChange={(event) => onFromChange(event.target.value)} /></label>
+          <label>结束<input aria-label="结束日期" type="date" value={to} min={from || undefined} onChange={(event) => onToChange(event.target.value)} /></label>
+          {(from || to) && <button type="button" onClick={onClear}>清除范围</button>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2848,12 +2952,22 @@ function DateRangeFilter({ from, to, onFromChange, onToChange }) {
   );
 }
 
-function ProductTable({ products, onOpenWorkbench, onPreviewCopy }) {
+function SaleTimeSortButton({ sort, onChange }) {
+  const label = sort === 'latest' ? '售卖时间：最新在前' : sort === 'earliest' ? '售卖时间：最早在前' : '售卖时间：未排序，保持 ID 顺序';
+  return (
+    <button className={`sale-time-sort ${sort}`} type="button" onClick={onChange} aria-label={`${label}，点击切换`} title={`${label}；点击切换`}>
+      <span>售卖时间</span>
+      <i aria-hidden="true">{sort === 'latest' ? '▼' : sort === 'earliest' ? '▲' : <>▲<br />▼</>}</i>
+    </button>
+  );
+}
+
+function ProductTable({ products, saleTimeSort, onSaleTimeSortChange, onOpenWorkbench, onPreviewCopy }) {
   return (
     <table className="product-table product-list-table">
       <thead>
         <tr>
-          <th>ID</th><th>上架时间</th><th>售卖时间</th><th>客户</th><th>账号</th><th>手机号</th><th>总成本</th><th>售价</th><th>利润</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
+          <th>ID</th><th>上架时间</th><th><SaleTimeSortButton sort={saleTimeSort} onChange={onSaleTimeSortChange} /></th><th>客户</th><th>账号</th><th>手机号</th><th>总成本</th><th>售价</th><th>利润</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
