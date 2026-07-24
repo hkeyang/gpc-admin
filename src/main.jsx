@@ -1302,20 +1302,20 @@ function salesCustomerSnapshot(product = {}, customers = []) {
 
 function compactSalesCustomerName(customer = {}) {
   const manual = String(customer.shortName || '').trim();
-  if (manual) return manual.slice(0, 8);
+  if (manual) return manual.slice(0, 4);
 
   const original = String(customer.zhanfuUsername || '').trim();
   if (!original) return '-';
   const withoutRegion = original.replace(/^(?:中国)?(?:湖北省)?(?:武汉市?|武汉)/, '');
   const withoutSuffix = withoutRegion.replace(/(?:有限责任公司|股份有限公司|有限公司|无线网络|信息技术|科技|网络|商贸|供应链|服务中心|工作室)$/u, '');
   const compact = withoutSuffix || withoutRegion || original;
-  return compact.length > 6 ? `${compact.slice(0, 6)}…` : compact;
+  return compact.slice(0, 4);
 }
 
-function saleTimeLabel(product = {}) {
-  const value = String(product.saleTime || '').trim();
-  if (!value) return '-';
-  return value.slice(0, 10);
+function productListDateLabel(value) {
+  const date = String(value || '').trim().slice(0, 10);
+  if (!date) return '-';
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date.slice(5) : date;
 }
 
 function filterSalesCustomers(customers = [], keyword = '', { includeDisabled = false, limit = 10 } = {}) {
@@ -2853,7 +2853,7 @@ function ProductTable({ products, onOpenWorkbench, onPreviewCopy }) {
     <table className="product-table product-list-table">
       <thead>
         <tr>
-          <th>ID</th><th>上架时间</th><th>售卖时间</th><th>客户</th><th>账号</th><th>总成本</th><th>售价</th><th>利润</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
+          <th>ID</th><th>上架时间</th><th>售卖时间</th><th>客户</th><th>账号</th><th>手机号</th><th>总成本</th><th>售价</th><th>利润</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -2865,10 +2865,11 @@ function ProductTable({ products, onOpenWorkbench, onPreviewCopy }) {
           return (
             <tr key={item.id}>
               <td>{item.id}</td>
-              <td>{productDateValue(item)}</td>
-              <td>{saleTimeLabel(item)}</td>
+              <td title={productDateValue(item)}>{productListDateLabel(item.createdAt)}</td>
+              <td title={String(item.saleTime || '')}>{productListDateLabel(item.saleTime)}</td>
               <td><span className="customer-list-name" title={customer.zhanfuUsername || ''}>{customerName}</span></td>
               <td><CopyableAccountCell value={item.account || item.email} compact /></td>
+              <td title={item.phone ? formatPhoneNumber(item.phoneCode, item.phone) : ''}>{item.phone ? formatPhoneNumber(item.phoneCode, item.phone) : '-'}</td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
