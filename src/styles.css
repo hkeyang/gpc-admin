@@ -604,6 +604,26 @@ nav { display: grid; gap: 8px; }
 .sale-time-sort i { display: inline-block; color: #a2aabb; font-style: normal; font-size: 8px; line-height: 7px; text-align: center; }
 .sale-time-sort.latest i, .sale-time-sort.earliest i { color: var(--purple); }
 .product-table td { color: #4f5a70; }
+.product-alert-row.warning td { background: #fffdf8; }
+.product-alert-row.critical td { background: #fff9fa; }
+.product-status-cell { display: flex; min-width: 0; align-items: center; gap: 3px; }
+.product-status-cell .copyable-account { min-width: 0; flex: 1 1 auto; }
+.phone-status-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-status-cell.disabled .phone-status-value { color: #df4a56; text-decoration: line-through; text-decoration-thickness: 1px; }
+.product-issue-tag {
+  flex: 0 0 auto;
+  max-width: 52px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.product-issue-tag.warning { background: #fff2df; color: #c76e12; }
+.product-issue-tag.danger { background: #fff0f1; color: #df4a56; }
 .copyable-account {
   position: relative;
   display: inline-block;

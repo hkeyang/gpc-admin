@@ -1339,6 +1339,24 @@ function sortProductsBySaleTime(products = [], sort = 'default') {
   });
 }
 
+function productAfterSaleMarker(product, lossEvents = []) {
+  const events = (Array.isArray(lossEvents) ? lossEvents : []).filter((event) => (
+    event?.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT
+    && String(event.originalProductId || '') === String(product?.id || '')
+  ));
+  if (!events.length) return null;
+  const pendingSettlement = events.some(lossEventNeedsInternalSettlement);
+  const reasons = events.map((event) => String(event.reason || '').trim()).filter(Boolean);
+  const detail = pendingSettlement
+    ? `关联 ${events.length} 次售后补偿，存在待结算售后成本${reasons.length ? `：${reasons.join('；')}` : ''}`
+    : `关联 ${events.length} 次售后补偿，售后成本已结算或无需内部结算${reasons.length ? `：${reasons.join('；')}` : ''}`;
+  return {
+    tone: pendingSettlement ? 'danger' : 'warning',
+    label: pendingSettlement ? '售后待结' : '售后记录',
+    detail
+  };
+}
+
 function compactSalesCustomerName(customer = {}) {
   const manual = String(customer.shortName || '').trim();
   if (manual) return manual.slice(0, 4);
@@ -2134,6 +2152,7 @@ function App() {
               title={businessTypeConfig(productType).label}
               products={visibleProducts}
               customers={salesCustomers}
+              lossEvents={lossEvents}
               exchangeRate={exchangeRate}
               pushTemplate={listPushTemplate(productType)}
               viewState={productListViewStates[page]}
@@ -2708,7 +2727,7 @@ function AlertRow({ icon: Icon, label, value, sub, tone }) {
   );
 }
 
-function ProductsPage({ productType, products, customers = [], exchangeRate, pushTemplate, viewState, onViewStateChange, onOpenWorkbench, onAddProduct, title }) {
+function ProductsPage({ productType, products, customers = [], lossEvents = [], exchangeRate, pushTemplate, viewState, onViewStateChange, onOpenWorkbench, onAddProduct, title }) {
   const listState = createProductListViewState(viewState);
   const {
     keyword,
@@ -2838,6 +2857,7 @@ function ProductsPage({ productType, products, customers = [], exchangeRate, pus
             <>
               <ProductTable
                 products={paginatedProducts}
+                lossEvents={lossEvents}
                 saleTimeSort={saleTimeSort}
                 onSaleTimeSortChange={() => updateListState({ saleTimeSort: saleTimeSort === 'default' ? 'latest' : saleTimeSort === 'latest' ? 'earliest' : 'default' }, true)}
                 onOpenWorkbench={openProductWorkbench}
@@ -2962,7 +2982,7 @@ function SaleTimeSortButton({ sort, onChange }) {
   );
 }
 
-function ProductTable({ products, saleTimeSort, onSaleTimeSortChange, onOpenWorkbench, onPreviewCopy }) {
+function ProductTable({ products, lossEvents = [], saleTimeSort, onSaleTimeSortChange, onOpenWorkbench, onPreviewCopy }) {
   return (
     <table className="product-table product-list-table">
       <thead>
@@ -2976,14 +2996,28 @@ function ProductTable({ products, saleTimeSort, onSaleTimeSortChange, onOpenWork
           const profit = productProfit(item);
           const customer = salesCustomerSnapshot(item);
           const customerName = compactSalesCustomerName(customer);
+          const afterSale = productAfterSaleMarker(item, lossEvents);
+          const phoneDisabled = phoneRenewalInfo(item).status === 'disabled';
+          const rowAlertTone = phoneDisabled || afterSale?.tone === 'danger' ? 'critical' : afterSale ? 'warning' : '';
+          const phone = item.phone ? formatPhoneNumber(item.phoneCode, item.phone) : '-';
           return (
-            <tr key={item.id}>
+            <tr key={item.id} className={rowAlertTone ? `product-alert-row ${rowAlertTone}` : ''}>
               <td>{item.id}</td>
               <td title={productDateValue(item)}>{productListDateLabel(item.createdAt)}</td>
               <td title={String(item.saleTime || '')}>{productListDateLabel(item.saleTime)}</td>
               <td><span className="customer-list-name" title={customer.zhanfuUsername || ''}>{customerName}</span></td>
-              <td><CopyableAccountCell value={item.account || item.email} compact /></td>
-              <td title={item.phone ? formatPhoneNumber(item.phoneCode, item.phone) : ''}>{item.phone ? formatPhoneNumber(item.phoneCode, item.phone) : '-'}</td>
+              <td>
+                <span className="product-status-cell">
+                  <CopyableAccountCell value={item.account || item.email} compact />
+                  {afterSale && <span className={`product-issue-tag ${afterSale.tone}`} title={afterSale.detail}>{afterSale.label}</span>}
+                </span>
+              </td>
+              <td>
+                <span className={`product-status-cell phone-status-cell${phoneDisabled ? ' disabled' : ''}`} title={phoneDisabled ? `${phone}：已停用` : phone}>
+                  <span className="phone-status-value">{phone}</span>
+                  {phoneDisabled && <span className="product-issue-tag danger">已停用</span>}
+                </span>
+              </td>
               <td>{cost.toFixed(2)}</td>
               <td>{Number(item.salePrice || 0).toFixed(2)}</td>
               <td className="profit-text">{profit.toFixed(2)}</td>
