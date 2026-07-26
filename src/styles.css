@@ -2274,16 +2274,30 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
 .loss-list-panel .panel-head { align-items: center; }
 .loss-list-panel .filter-select { min-width: 132px; }
 .loss-table-wrap { width: 100%; overflow-x: auto; }
-.loss-table { min-width: 1220px; }
+.loss-table { min-width: 1080px; }
+.loss-table th,
+.loss-table td { padding-left: 5px; padding-right: 5px; }
+/* Override the generic product-table columns: a YYYY-MM-DD date needs a real column. */
+.loss-table th:nth-child(1), .loss-table td:nth-child(1) { width: 82px; white-space: nowrap; }
+.loss-table th:nth-child(2), .loss-table td:nth-child(2) { width: 62px; }
+.loss-table th:nth-child(3), .loss-table td:nth-child(3) { width: 148px; }
+.loss-table th:nth-child(4), .loss-table td:nth-child(4) { width: 132px; }
+.loss-table th:nth-child(5), .loss-table td:nth-child(5) { width: 70px; }
+.loss-table th:nth-child(6), .loss-table td:nth-child(6) { width: 66px; }
+.loss-table th:nth-child(7), .loss-table td:nth-child(7) { width: 94px; }
+.loss-table th:nth-child(8), .loss-table td:nth-child(8) { width: 100px; }
+.loss-table th:nth-child(9), .loss-table td:nth-child(9) { width: 68px; }
+.loss-table th:nth-child(10), .loss-table td:nth-child(10) { width: 98px; }
 .loss-table td strong { display: block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #26304a; }
 .loss-table td small { display: block; margin-top: 5px; color: #8d97a9; font-size: 11px; font-weight: 700; }
+.loss-table .status-badge { min-width: 0; height: 20px; padding: 0 5px; border-radius: 6px; font-size: 10px; }
 .loss-table .negative-value { color: #d95555; font-weight: 900; }
 .loss-table .positive-value { color: #24a66a; font-weight: 900; }
-.loss-row-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.loss-row-actions { display: flex; gap: 4px; flex-wrap: wrap; }
 .loss-row-actions button {
   border: 0;
   border-radius: 6px;
-  padding: 6px 8px;
+  padding: 5px 6px;
   background: #f0edff;
   color: var(--purple);
   font-size: 11px;
