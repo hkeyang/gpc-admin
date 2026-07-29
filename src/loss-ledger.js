@@ -29,6 +29,10 @@ export const LOSS_SHARING_LABELS = Object.freeze({
   [LOSS_SHARING_RULES.WUHAN]: '武汉独自承担（保留真实成本）'
 });
 
+export function isVoidedLossEvent(event = {}) {
+  return event?.settlementStatus === 'voided';
+}
+
 export function normalizeLossSharingRule(value) {
   if (value === LOSS_SHARING_RULES.HONG_KONG || value === LOSS_SHARING_RULES.WUHAN) return value;
   return LOSS_SHARING_RULES.EQUAL;
@@ -122,6 +126,7 @@ export function lossEventBurdens(event = {}) {
 export function calculateProfitAttribution({ normalProfitUsd = 0, lossEvents = [] } = {}) {
   const normalProfit = finiteNumber(normalProfitUsd);
   const lossTotals = (Array.isArray(lossEvents) ? lossEvents : []).reduce((totals, event) => {
+    if (isVoidedLossEvent(event)) return totals;
     const burdens = lossEventBurdens(event);
     totals.companyLossUsd += finiteNumber(event?.netLossUsd);
     totals.hongKongLossBurdenUsd += burdens.hongKongBurdenUsd;
@@ -149,7 +154,7 @@ export function calculateProfitAttribution({ normalProfitUsd = 0, lossEvents = [
 }
 
 export function lossEventNeedsInternalSettlement(event = {}) {
-  if (event.settlementStatus === 'settled' || event.settlementStatus === 'not_required') return false;
+  if (isVoidedLossEvent(event) || event.settlementStatus === 'settled' || event.settlementStatus === 'not_required') return false;
   return Math.abs(finiteNumber(event.hongKongSettlementUsd)) >= 0.005;
 }
 

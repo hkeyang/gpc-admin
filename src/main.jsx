@@ -67,6 +67,7 @@ import {
   calculateLossSettlement,
   lossEventBurdens,
   lossEventNeedsInternalSettlement,
+  isVoidedLossEvent,
   lossSettlementDirection
 } from './loss-ledger.js';
 
@@ -679,6 +680,7 @@ function buildDailyTrend(products, days = 7, lossEvents = []) {
     row.profit += productProfit(product);
   });
   lossEvents.forEach((event) => {
+    if (isVoidedLossEvent(event)) return;
     const key = String(event.eventDate || event.createdAt || '').slice(0, 10);
     const row = byDate.get(key);
     if (!row) return;
@@ -699,6 +701,7 @@ function buildMonthlyBars(products, lossEvents = []) {
     byMonth.set(key, current);
   });
   lossEvents.forEach((event) => {
+    if (isVoidedLossEvent(event)) return;
     const key = String(event.eventDate || event.createdAt || '').slice(0, 7);
     if (!key) return;
     const label = `${Number(key.slice(5, 7))}月`;
@@ -760,6 +763,7 @@ function shouldShowPendingSettlement(product) {
 }
 
 function lossEventSettlementLabel(event) {
+  if (isVoidedLossEvent(event)) return '已撤销';
   if (event?.settlementStatus === 'settled') return '已结算';
   return lossEventNeedsInternalSettlement(event) ? '未结算' : '无需内部结算';
 }
@@ -1039,7 +1043,7 @@ function statusClass(status) {
   if (['待售', '待补成本', '可出售'].includes(status)) return 'primary';
   if (['正常'].includes(status)) return 'success';
   if (['待续费', '临近上限', '准备中', '售后补偿'].includes(status)) return 'warning';
-  if (['暂停出售'].includes(status)) return 'muted';
+  if (['暂停出售', '已撤销'].includes(status)) return 'muted';
   return 'warning';
 }
 
@@ -1342,6 +1346,7 @@ function sortProductsBySaleTime(products = [], sort = 'default') {
 function productAfterSaleMarker(product, lossEvents = []) {
   const events = (Array.isArray(lossEvents) ? lossEvents : []).filter((event) => (
     event?.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT
+    && !isVoidedLossEvent(event)
     && String(event.originalProductId || '') === String(product?.id || '')
   ));
   if (!events.length) return null;
@@ -2045,6 +2050,24 @@ function App() {
     }
   };
 
+  const voidLossEvent = async (event) => {
+    setLossEventSync((current) => ({ ...current, saving: true, message: '' }));
+    try {
+      const data = await apiJson(`/api/loss-events/${encodeURIComponent(event.id)}/void`, {
+        method: 'POST',
+        body: JSON.stringify({ voidReason: '确认误报，撤销库存报损及恢复可售冲回' })
+      });
+      const updates = new Map((data.events || []).map((item) => [item.id, item]));
+      setLossEvents((current) => current.map((item) => updates.get(item.id) || item));
+      setLossEventSync({ loading: false, saving: false, message: '误报已撤销并保留审计痕迹，已从利润和待结算统计中排除。' });
+      return { ok: true, events: data.events || [] };
+    } catch (error) {
+      const message = error.message || '撤销异常记录失败，请稍后重试。';
+      setLossEventSync({ loading: false, saving: false, message });
+      return { ok: false, message };
+    }
+  };
+
   const handleLogin = async (username, password) => {
     try {
       const response = await fetch('/api/auth/login', {
@@ -2189,6 +2212,7 @@ function App() {
             saving={lossEventSync.saving}
             onSaveEvent={saveLossEvent}
             onSettleEvent={settleLossEvent}
+            onVoidEvent={voidLossEvent}
           />
         )}
         {lossEventSync.message && <div className="global-notice"><Info size={15} />{lossEventSync.message}</div>}
@@ -3509,7 +3533,7 @@ function ProductAccountPicker({
   );
 }
 
-function LossEventsPage({ products, events, exchangeRate, loading, saving, onSaveEvent, onSettleEvent }) {
+function LossEventsPage({ products, events, exchangeRate, loading, saving, onSaveEvent, onSettleEvent, onVoidEvent }) {
   const [draft, setDraft] = useState(null);
   const [filter, setFilter] = useState('全部');
   const [notice, setNotice] = useState('');
@@ -3536,7 +3560,9 @@ function LossEventsPage({ products, events, exchangeRate, loading, saving, onSav
     })
     : calculateLossSettlement({ costs: selectedProduct?.costs || [], sharingRule: draft?.sharingRule });
   const direction = lossSettlementDirection(preview.hongKongSettlementUsd);
-  const netLoss = events.reduce((total, item) => total + Number(item.netLossUsd || 0), 0);
+  const activeEvents = events.filter((item) => !isVoidedLossEvent(item));
+  const voidedEventCount = events.length - activeEvents.length;
+  const netLoss = activeEvents.reduce((total, item) => total + Number(item.netLossUsd || 0), 0);
   const pendingSettlement = events
     .filter(lossEventNeedsInternalSettlement)
     .reduce((total, item) => total + Math.abs(Number(item.hongKongSettlementUsd || 0)), 0);
@@ -3583,6 +3609,13 @@ function LossEventsPage({ products, events, exchangeRate, loading, saving, onSav
     setNotice(result.ok ? '账号已恢复可售，并新增损失冲回记录。' : result.message || '恢复失败。');
   };
 
+  const voidMisreportedWriteoff = async (event) => {
+    const confirmed = window.confirm(`确认撤销「${lossProductLabel(event.productSnapshot)}」的库存报损及对应恢复可售记录吗？两条记录会保留为“已撤销”，但不再计入利润、待结算或异常笔数。`);
+    if (!confirmed) return;
+    const result = await onVoidEvent(event);
+    setNotice(result.ok ? '已撤销误报，账本审计痕迹已保留。' : result.message || '撤销失败。');
+  };
+
   return (
     <section className="page loss-events-page">
       <div className="page-title">
@@ -3591,8 +3624,8 @@ function LossEventsPage({ products, events, exchangeRate, loading, saving, onSav
       </div>
 
       <div className="kpi-grid four">
-        <Kpi icon={RefreshCw} label="售后补偿" value={`${events.filter((item) => item.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT).length} 笔`} tone="orange" />
-        <Kpi icon={AlertTriangle} label="库存报损" value={`${events.filter((item) => item.eventType === LOSS_EVENT_TYPES.INVENTORY_WRITEOFF).length} 笔`} tone="red" />
+        <Kpi icon={RefreshCw} label="售后补偿" value={`${activeEvents.filter((item) => item.eventType === LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT).length} 笔`} tone="orange" />
+        <Kpi icon={AlertTriangle} label="库存报损" value={`${activeEvents.filter((item) => item.eventType === LOSS_EVENT_TYPES.INVENTORY_WRITEOFF).length} 笔`} tone="red" />
         <Kpi icon={TrendingUp} label="累计净损失" value={money(netLoss)} sub="已扣除追回和恢复" tone="purple" />
         <Kpi icon={WalletCards} label="待内部结算" value={money(pendingSettlement)} sub="按应补款绝对额统计" tone="blue" />
       </div>
@@ -3681,7 +3714,7 @@ function LossEventsPage({ products, events, exchangeRate, loading, saving, onSav
       <Panel
         className="loss-list-panel"
         title="异常账本"
-        hint={loading ? '正在读取记录...' : `共 ${events.length} 笔，已结算记录保持只读`}
+        hint={loading ? '正在读取记录...' : `有效异常 ${activeEvents.length} 笔${voidedEventCount ? ` · 已撤销 ${voidedEventCount} 笔` : ''}，已结算记录保持只读`}
         action={<FilterSelect label="类型" value={filter} onChange={setFilter} options={['全部', ...Object.values(LOSS_EVENT_LABELS)]} />}
       >
         {!visibleEvents.length ? (
@@ -3694,9 +3727,15 @@ function LossEventsPage({ products, events, exchangeRate, loading, saving, onSav
                 {visibleEvents.map((event) => {
                   const eventDirection = lossSettlementDirection(event.hongKongSettlementUsd);
                   const burdens = lossEventBurdens(event);
-                  const canRecover = [LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT, LOSS_EVENT_TYPES.INVENTORY_WRITEOFF].includes(event.eventType) && event.recoveryStatus !== 'recovered' && Number(event.netLossUsd || 0) > 0;
+                  const isVoided = isVoidedLossEvent(event);
+                  const linkedRecovery = events.find((item) => item.referenceEventId === event.id && item.eventType === LOSS_EVENT_TYPES.INVENTORY_RECOVERY);
+                  const canRecover = !isVoided && [LOSS_EVENT_TYPES.AFTER_SALE_REPLACEMENT, LOSS_EVENT_TYPES.INVENTORY_WRITEOFF].includes(event.eventType) && event.recoveryStatus !== 'recovered' && Number(event.netLossUsd || 0) > 0;
+                  const canVoid = !isVoided
+                    && event.eventType === LOSS_EVENT_TYPES.INVENTORY_WRITEOFF
+                    && event.settlementStatus === 'unsettled'
+                    && linkedRecovery?.settlementStatus === 'unsettled';
                   return (
-                    <tr key={event.id}>
+                    <tr key={event.id} className={isVoided ? 'loss-row-voided' : ''}>
                       <td>{event.eventDate || '-'}</td>
                       <td><StatusBadge label={LOSS_EVENT_LABELS[event.eventType] || event.eventType} /></td>
                       <td><strong>{lossProductLabel(event.productSnapshot)}</strong><small>{businessTypeConfig(event.productType).shortLabel}</small></td>
@@ -3705,12 +3744,13 @@ function LossEventsPage({ products, events, exchangeRate, loading, saving, onSav
                       <td className={Number(event.netLossUsd || 0) < 0 ? 'positive-value' : 'negative-value'}>{money(event.netLossUsd)}</td>
                       <td>香港 {money(burdens.hongKongBurdenUsd)}<small>武汉 {money(burdens.wuhanBurdenUsd)}</small></td>
                       <td>{eventDirection.label}<small>{money(eventDirection.amount)}</small></td>
-                      <td><StatusBadge label={lossEventSettlementLabel(event)} /></td>
+                      <td><StatusBadge label={lossEventSettlementLabel(event)} />{isVoided && <small>{event.voidReason || '确认误报'}{event.voidedAt ? ` · ${String(event.voidedAt).replace('T', ' ').slice(0, 16)}` : ''}</small>}</td>
                       <td>
                         <div className="loss-row-actions">
                           {lossEventNeedsInternalSettlement(event) && <button type="button" onClick={() => onSettleEvent(event)}>结算</button>}
                           {canRecover && <button type="button" onClick={() => startDraft(LOSS_EVENT_TYPES.COST_RECOVERY, event.id)}>登记追回</button>}
                           {event.eventType === LOSS_EVENT_TYPES.INVENTORY_WRITEOFF && event.recoveryStatus === 'none' && <button type="button" onClick={() => restoreInventory(event)}>恢复可售</button>}
+                          {canVoid && <button type="button" disabled={saving} onClick={() => voidMisreportedWriteoff(event)}>撤销误报</button>}
                         </div>
                       </td>
                     </tr>

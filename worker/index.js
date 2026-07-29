@@ -281,6 +281,17 @@ export class AuthStore {
       }
     }
 
+    const lossEventVoidMatch = url.pathname.match(/^\/loss-events\/([^/]+)\/void$/);
+    if (lossEventVoidMatch && request.method === 'POST') {
+      const id = decodeURIComponent(lossEventVoidMatch[1]);
+      const body = await readJson(request);
+      try {
+        return json(await this.voidInventoryWriteoffPair(id, body));
+      } catch (error) {
+        return json({ message: error.message || '撤销异常记录失败' }, 400);
+      }
+    }
+
     if (url.pathname === '/telegram-targets' && request.method === 'GET') {
       const targets = await this.listTelegramTargets();
       return json({ targets: targets.map(publicTelegramTarget) });
@@ -1269,10 +1280,57 @@ export class AuthStore {
     return { event, product: nextProduct, referenceEvent: nextReference };
   }
 
+  async voidInventoryWriteoffPair(id, input = {}) {
+    const writeoff = await this.state.storage.get(`loss_event:${cleanLine(id)}`);
+    if (!writeoff || writeoff.eventType !== LOSS_EVENT_TYPES.INVENTORY_WRITEOFF) {
+      throw new Error('请选择一笔库存报损记录进行撤销。');
+    }
+    if (writeoff.settlementStatus !== 'unsettled') {
+      throw new Error('只有尚未结算的库存报损记录可以撤销。');
+    }
+
+    const recoveries = (await this.listLossEvents()).filter((item) => (
+      item.referenceEventId === writeoff.id && item.eventType === LOSS_EVENT_TYPES.INVENTORY_RECOVERY
+    ));
+    if (recoveries.length !== 1) {
+      throw new Error('只能撤销存在唯一“恢复可售”冲回记录的报损。');
+    }
+    const recovery = recoveries[0];
+    if (recovery.settlementStatus !== 'unsettled') {
+      throw new Error('恢复可售冲回已结算，不能撤销该报损对。');
+    }
+
+    const product = await this.state.storage.get(`product:${writeoff.productId}`);
+    if (!product || product.isSold || normalizeAvailabilityStatus(product.availabilityStatus) !== 'available') {
+      throw new Error('该账号已进入后续流程，不能撤销历史报损。');
+    }
+
+    const now = new Date().toISOString();
+    const voidReason = String(input.voidReason || '确认误报，撤销库存报损及恢复可售冲回').trim().slice(0, 500);
+    const voidedBy = cleanLine(input.voidedBy).slice(0, 80);
+    const voidPair = (event, pairedEventId) => ({
+      ...event,
+      settlementStatus: 'voided',
+      voidedAt: now,
+      voidedBy,
+      voidReason,
+      voidedPairEventId: pairedEventId,
+      updatedAt: now
+    });
+    const voidedWriteoff = voidPair(writeoff, recovery.id);
+    const voidedRecovery = voidPair(recovery, writeoff.id);
+
+    await this.state.storage.transaction(async (transaction) => {
+      await transaction.put(`loss_event:${voidedWriteoff.id}`, voidedWriteoff);
+      await transaction.put(`loss_event:${voidedRecovery.id}`, voidedRecovery);
+    });
+    return { events: [voidedWriteoff, voidedRecovery] };
+  }
+
   async settleLossEvent(id, input = {}) {
     const event = await this.state.storage.get(`loss_event:${cleanLine(id)}`);
     if (!event) throw new Error('异常记录不存在。');
-    if (event.settlementStatus === 'settled' || event.settlementStatus === 'not_required' || Math.abs(Number(event.hongKongSettlementUsd || 0)) < 0.005) return event;
+    if (event.settlementStatus === 'settled' || event.settlementStatus === 'not_required' || event.settlementStatus === 'voided' || Math.abs(Number(event.hongKongSettlementUsd || 0)) < 0.005) return event;
     const exchangeRate = positiveNumberOrNull(input.exchangeRate);
     if (!exchangeRate) throw new Error('结算汇率必须大于 0。');
     const now = new Date();
@@ -1600,6 +1658,17 @@ async function handleApi(request, env, url) {
     return authStore(env).fetch(new Request(`https://auth.local/loss-events/${lossEventSettleMatch[1]}/settle`, {
       method: 'POST',
       body: JSON.stringify({ ...body, settledBy: sessionUser.username }),
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  const lossEventVoidMatch = url.pathname.match(/^\/api\/loss-events\/([^/]+)\/void$/);
+  if (lossEventVoidMatch && request.method === 'POST') {
+    if (sessionUser.role !== 'super_admin') return json({ message: '只有超级管理员可以撤销异常账本记录' }, 403);
+    const body = await readJson(request);
+    return authStore(env).fetch(new Request(`https://auth.local/loss-events/${lossEventVoidMatch[1]}/void`, {
+      method: 'POST',
+      body: JSON.stringify({ ...body, voidedBy: sessionUser.username }),
       headers: { 'Content-Type': 'application/json' }
     }));
   }

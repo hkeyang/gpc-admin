@@ -134,6 +134,38 @@ test('未售账号报损按实际垫付差额结算并可用冲回记录恢复',
   assert.equal(recovery.data.referenceEvent.recoveryStatus, 'recovered');
 });
 
+test('误报的库存报损与恢复可售可成对撤销并保留审计痕迹', async () => {
+  const damaged = product(31);
+  const storage = new MemoryStorage([['product:31', damaged]]);
+  const store = new AuthStore({ storage }, {});
+
+  const writeoff = await call(store, '/loss-events', 'POST', {
+    eventType: LOSS_EVENT_TYPES.INVENTORY_WRITEOFF,
+    productId: 31,
+    sharingRule: 'equal'
+  });
+  const recovery = await call(store, '/loss-events', 'POST', {
+    eventType: LOSS_EVENT_TYPES.INVENTORY_RECOVERY,
+    referenceEventId: writeoff.data.event.id
+  });
+  const voided = await call(store, `/loss-events/${writeoff.data.event.id}/void`, 'POST', {
+    voidedBy: 'super_admin',
+    voidReason: '确认误报'
+  });
+
+  assert.equal(voided.status, 200);
+  assert.equal(voided.data.events.length, 2);
+  assert.ok(voided.data.events.every((event) => event.settlementStatus === 'voided'));
+  assert.ok(voided.data.events.every((event) => event.voidedBy === 'super_admin'));
+  assert.ok(voided.data.events.every((event) => event.voidReason === '确认误报'));
+  assert.equal((await storage.get('product:31')).availabilityStatus, 'available');
+  assert.equal((await storage.get(`loss_event:${recovery.data.event.id}`)).settlementStatus, 'voided');
+
+  const retrySettle = await call(store, `/loss-events/${writeoff.data.event.id}/settle`, 'POST', { exchangeRate: 7 });
+  assert.equal(retrySettle.status, 200);
+  assert.equal(retrySettle.data.event.settlementStatus, 'voided');
+});
+
 test('香港独自承担且无需跨方补款时自动标记为无需内部结算', async () => {
   const replacement = product(4, {
     costs: [{ id: 1, label: '账号成本', amount: 357, owner: 'hongKong', remark: '' }]

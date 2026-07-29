@@ -98,3 +98,17 @@ test('已报损账号恢复可售时以追回额完整冲回损失', () => {
   assert.equal(result.hongKongBurdenUsd, -200);
   assert.equal(result.hongKongSettlementUsd, -200);
 });
+
+test('已撤销异常保留账本但不参与利润或内部结算', () => {
+  const voided = {
+    ...calculateLossSettlement({ costs: [{ amount: 357, owner: 'hongKong' }] }),
+    settlementStatus: 'voided'
+  };
+  const result = calculateProfitAttribution({ normalProfitUsd: 600, lossEvents: [voided] });
+
+  assert.equal(lossEventNeedsInternalSettlement(voided), false);
+  assert.equal(result.companyLossUsd, 0);
+  assert.equal(result.finalCompanyProfitUsd, 600);
+  assert.equal(result.finalHongKongProfitUsd, 300);
+  assert.equal(result.finalWuhanProfitUsd, 300);
+});
