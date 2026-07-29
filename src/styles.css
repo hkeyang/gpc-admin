@@ -463,8 +463,8 @@ nav { display: grid; gap: 8px; }
 .product-table th:nth-child(10), .product-table td:nth-child(10) { width: 112px; }
 .product-list-table { min-width: 1080px; }
 .product-list-table th:nth-child(1), .product-list-table td:nth-child(1) { width: 34px; }
-.product-list-table th:nth-child(2), .product-list-table td:nth-child(2),
-.product-list-table th:nth-child(3), .product-list-table td:nth-child(3) { width: 52px; }
+.product-list-table th:nth-child(2), .product-list-table td:nth-child(2) { width: 52px; }
+.product-list-table th:nth-child(3), .product-list-table td:nth-child(3) { width: 64px; }
 .product-list-table th:nth-child(4), .product-list-table td:nth-child(4) { width: 50px; }
 .product-list-table th:nth-child(5), .product-list-table td:nth-child(5) { width: 64px; }
 .product-list-table th:nth-child(6), .product-list-table td:nth-child(6) { width: 106px; }
@@ -599,9 +599,9 @@ nav { display: grid; gap: 8px; }
 .danger-button:disabled { opacity: .45; cursor: not-allowed; }
 .product-table th, .product-table td { height: 39px; padding: 0 7px; border-bottom: 1px solid #f0f2f8; font-size: 10.5px; text-align: left; white-space: nowrap; }
 .product-table th { color: #5e697d; font-weight: 800; background: #fbfcff; }
-.sale-time-sort { display: inline-flex; align-items: center; gap: 3px; color: inherit; font: inherit; font-weight: inherit; white-space: nowrap; }
+.sale-time-sort { display: inline-flex; align-items: center; gap: 2px; color: inherit; font: inherit; font-weight: inherit; white-space: nowrap; }
 .sale-time-sort:hover { color: var(--purple); }
-.sale-time-sort i { display: inline-block; color: #a2aabb; font-style: normal; font-size: 8px; line-height: 7px; text-align: center; }
+.sale-time-sort i { display: inline-block; flex: 0 0 8px; width: 8px; color: #a2aabb; font-style: normal; font-size: 8px; line-height: 7px; text-align: center; }
 .sale-time-sort.latest i, .sale-time-sort.earliest i { color: var(--purple); }
 .product-table td { color: #4f5a70; }
 .product-alert-row.warning td { background: #fffdf8; }
