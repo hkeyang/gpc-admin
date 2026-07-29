@@ -1300,11 +1300,6 @@ export class AuthStore {
       throw new Error('恢复可售冲回已结算，不能撤销该报损对。');
     }
 
-    const product = await this.state.storage.get(`product:${writeoff.productId}`);
-    if (!product || product.isSold || normalizeAvailabilityStatus(product.availabilityStatus) !== 'available') {
-      throw new Error('该账号已进入后续流程，不能撤销历史报损。');
-    }
-
     const now = new Date().toISOString();
     const voidReason = String(input.voidReason || '确认误报，撤销库存报损及恢复可售冲回').trim().slice(0, 500);
     const voidedBy = cleanLine(input.voidedBy).slice(0, 80);

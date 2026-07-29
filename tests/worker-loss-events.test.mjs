@@ -148,6 +148,12 @@ test('误报的库存报损与恢复可售可成对撤销并保留审计痕迹',
     eventType: LOSS_EVENT_TYPES.INVENTORY_RECOVERY,
     referenceEventId: writeoff.data.event.id
   });
+  await storage.put('product:31', {
+    ...(await storage.get('product:31')),
+    isSold: true,
+    salePrice: 1000,
+    availabilityStatus: 'available'
+  });
   const voided = await call(store, `/loss-events/${writeoff.data.event.id}/void`, 'POST', {
     voidedBy: 'super_admin',
     voidReason: '确认误报'
@@ -158,7 +164,8 @@ test('误报的库存报损与恢复可售可成对撤销并保留审计痕迹',
   assert.ok(voided.data.events.every((event) => event.settlementStatus === 'voided'));
   assert.ok(voided.data.events.every((event) => event.voidedBy === 'super_admin'));
   assert.ok(voided.data.events.every((event) => event.voidReason === '确认误报'));
-  assert.equal((await storage.get('product:31')).availabilityStatus, 'available');
+  assert.equal((await storage.get('product:31')).isSold, true);
+  assert.equal((await storage.get('product:31')).salePrice, 1000);
   assert.equal((await storage.get(`loss_event:${recovery.data.event.id}`)).settlementStatus, 'voided');
 
   const retrySettle = await call(store, `/loss-events/${writeoff.data.event.id}/settle`, 'POST', { exchangeRate: 7 });
