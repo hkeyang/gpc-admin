@@ -148,6 +148,12 @@ test('误报的库存报损与恢复可售可成对撤销并保留审计痕迹',
     eventType: LOSS_EVENT_TYPES.INVENTORY_RECOVERY,
     referenceEventId: writeoff.data.event.id
   });
+  // Older records may predate a normalized settlement-status value.  They are
+  // still safe to void provided neither side has actually been settled.
+  await storage.put(`loss_event:${writeoff.data.event.id}`, {
+    ...(await storage.get(`loss_event:${writeoff.data.event.id}`)),
+    settlementStatus: ''
+  });
   await storage.put('product:31', {
     ...(await storage.get('product:31')),
     isSold: true,

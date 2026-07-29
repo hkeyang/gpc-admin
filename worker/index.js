@@ -1285,7 +1285,10 @@ export class AuthStore {
     if (!writeoff || writeoff.eventType !== LOSS_EVENT_TYPES.INVENTORY_WRITEOFF) {
       throw new Error('请选择一笔库存报损记录进行撤销。');
     }
-    if (writeoff.settlementStatus !== 'unsettled') {
+    // Historical loss entries created before the settlement-status field was
+    // normalized can legitimately have an empty status.  Treat only an
+    // actually settled or already-voided entry as immutable here.
+    if (['settled', 'voided'].includes(String(writeoff.settlementStatus || ''))) {
       throw new Error('只有尚未结算的库存报损记录可以撤销。');
     }
 
@@ -1296,7 +1299,7 @@ export class AuthStore {
       throw new Error('只能撤销存在唯一“恢复可售”冲回记录的报损。');
     }
     const recovery = recoveries[0];
-    if (recovery.settlementStatus !== 'unsettled') {
+    if (['settled', 'voided'].includes(String(recovery.settlementStatus || ''))) {
       throw new Error('恢复可售冲回已结算，不能撤销该报损对。');
     }
 
