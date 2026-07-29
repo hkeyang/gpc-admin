@@ -4975,7 +4975,7 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
                 })}
                 onCreate={onSaveCustomer}
               />
-              <Input label="售价（USD）" type="number" value={draft.salePrice} onChange={(value) => updateField('salePrice', Number(value))} />
+              <Input label="售价（USD）" type="number" value={draft.salePrice} onChange={(value) => updateField('salePrice', value === '' ? '' : Number(value))} />
               <Input label="销售时间" type="datetime-local" value={toDateTimeInputValue(draft.saleTime)} onChange={(value) => updateField('saleTime', fromDateTimeInputValue(value))} />
               <Toggle label="是否售出" checked={draft.isSold} onChange={updateSaleStatus} />
               <Toggle label="是否回款" checked={draft.isPaid} onChange={updatePaidStatus} />
