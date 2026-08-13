@@ -169,7 +169,10 @@ function isProductListPage(page) {
 }
 
 function createProductListViewState(input = {}) {
-  const saleTimeSort = ['default', 'latest', 'earliest'].includes(input.saleTimeSort) ? input.saleTimeSort : 'default';
+  // Product lists are primarily used as a sales and settlement work queue.
+  // Keep an explicit "default" option for people who need the ID order, but
+  // make a newly opened list lead with the most recently sold accounts.
+  const saleTimeSort = ['default', 'latest', 'earliest'].includes(input.saleTimeSort) ? input.saleTimeSort : 'latest';
   return {
     keyword: String(input.keyword || ''),
     availabilityFilter: input.availabilityFilter || '在售列表',
@@ -205,7 +208,7 @@ function productListViewStateFromParams(params = new URLSearchParams()) {
     paidFilter: params.get('paid') || '全部',
     settlementFilter: params.get('settlement') || '全部',
     customerFilter: params.get('customer') || '',
-    saleTimeSort: params.get('saleSort') || 'default',
+    saleTimeSort: params.has('saleSort') ? params.get('saleSort') : 'latest',
     dateFrom: params.get('from') || '',
     dateTo: params.get('to') || '',
     pageSize: params.get('size') || 10,
