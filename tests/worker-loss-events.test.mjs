@@ -200,6 +200,58 @@ test('香港独自承担且无需跨方补款时自动标记为无需内部结�
   assert.equal((await storage.get('product:4')).costs[0].amount, 357);
 });
 
+test('新销售锁定卖出汇率，结算优先使用该汇率且不改写历史快照', async () => {
+  const newSale = product(50, { salePrice: 1000 });
+  const historicalSale = product(51, {
+    isSold: true,
+    isPaid: true,
+    salePrice: 1000,
+    settlementStatus: 'settled',
+    settlementExchangeRate: 6.7,
+    settlementHongKongReceivableCny: 4690,
+    settlementWuhanRetainedCny: 2010,
+    settledAt: '2026-07-01 10:00'
+  });
+  const storage = new MemoryStorage([
+    ['product:50', newSale],
+    ['product:51', historicalSale]
+  ]);
+  const store = new AuthStore({ storage }, {});
+
+  const markedSold = await call(store, '/products/50', 'PUT', {
+    isSold: true,
+    saleExchangeRate: 6.81,
+    saleExchangeRateLockedAt: '2026-08-14T09:30:00.000Z'
+  });
+  assert.equal(markedSold.status, 200);
+  assert.equal(markedSold.data.product.saleExchangeRate, 6.81);
+  assert.equal(markedSold.data.product.saleExchangeRateLockedAt, '2026-08-14T09:30:00.000Z');
+
+  const settled = await call(store, '/products/50', 'PUT', {
+    settlementStatus: 'settled',
+    settlementExchangeRate: 7.22,
+    settlementHongKongReceivableCny: 1,
+    settlementWuhanRetainedCny: 1,
+    settledAt: '2026-08-20 12:00'
+  });
+  assert.equal(settled.status, 200);
+  assert.equal(settled.data.product.settlementExchangeRate, 6.81);
+  assert.equal(settled.data.product.settlementHongKongReceivableUsd, 700);
+  assert.equal(settled.data.product.settlementHongKongReceivableCny, 4767);
+  assert.equal(settled.data.product.settlementWuhanRetainedCny, 2043);
+
+  const historicalEdit = await call(store, '/products/51', 'PUT', {
+    remark: '补充备注',
+    settlementExchangeRate: 7.22,
+    settlementHongKongReceivableCny: 1
+  });
+  assert.equal(historicalEdit.status, 200);
+  assert.equal(historicalEdit.data.product.settlementExchangeRate, 6.7);
+  assert.equal(historicalEdit.data.product.settlementHongKongReceivableCny, 4690);
+  assert.equal(historicalEdit.data.product.settlementWuhanRetainedCny, 2010);
+  assert.equal(historicalEdit.data.product.saleExchangeRate, null);
+});
+
 test('读取空异常账本不会改写任何现有产品', async () => {
   const existing = product(9, { account: 'legacy-account' });
   const storage = new MemoryStorage([['product:9', existing]]);

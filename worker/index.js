@@ -724,13 +724,49 @@ export class AuthStore {
         throw new Error('售后补偿和已损坏状态只能在“异常处理”中变更。');
       }
     }
-    const product = await this.sanitizeProductForSave(input, id);
+    let nextInput = input;
+    const wasSettled = existing?.settlementStatus === 'settled';
+    const willSettle = input.settlementStatus === 'settled';
+    if (wasSettled) {
+      // A settled product is an accounting snapshot.  Preserve the complete
+      // settlement values even if a later product edit submits stale fields.
+      nextInput = { ...input, ...settlementSnapshotFields(existing) };
+    } else if (willSettle) {
+      const saleRate = positiveNumberOrNull(existing?.saleExchangeRate) || positiveNumberOrNull(input.saleExchangeRate);
+      const rate = saleRate || positiveNumberOrNull(input.settlementExchangeRate);
+      if (!rate) throw new Error('结算时缺少有效汇率，请刷新后重试。');
+      nextInput = {
+        ...input,
+        ...settlementSnapshotForProduct(input, rate)
+      };
+    }
+    const product = await this.sanitizeProductForSave(nextInput, id, existing);
     await this.state.storage.put(`product:${product.id}`, product);
     return product;
   }
 
-  async sanitizeProductForSave(input, id) {
+  async sanitizeProductForSave(input, id, existing = null) {
     const product = sanitizeProduct(input, id);
+    const existingRate = positiveNumberOrNull(existing?.saleExchangeRate);
+    const isFirstRecordedSale = Boolean(product.isSold && (!existing || !existing.isSold));
+    if (existingRate) {
+      // The original sale rate must stay immutable after it has been captured.
+      product.saleExchangeRate = existingRate;
+      product.saleExchangeRateLockedAt = cleanLine(existing.saleExchangeRateLockedAt);
+    } else if (existing?.isSold) {
+      // Historical sales remain historical: do not populate a made-up rate
+      // merely because someone later edits the product.
+      product.saleExchangeRate = null;
+      product.saleExchangeRateLockedAt = '';
+    } else if (isFirstRecordedSale) {
+      product.saleExchangeRate = positiveNumberOrNull(input.saleExchangeRate);
+      product.saleExchangeRateLockedAt = product.saleExchangeRate
+        ? cleanLine(input.saleExchangeRateLockedAt) || new Date().toISOString()
+        : '';
+    } else {
+      product.saleExchangeRate = null;
+      product.saleExchangeRateLockedAt = '';
+    }
     const customerId = normalizeSalesCustomerId(input.salesCustomerId || product.salesCustomerId);
     if (!customerId) return product;
 
@@ -1076,23 +1112,11 @@ export class AuthStore {
   }
 
   async settleProduct(existing, patch, fixedId) {
-    const product = await this.sanitizeProductForSave({
+    return this.saveProduct({
       ...existing,
+      ...patch,
       settlementStatus: 'settled',
-      settlementExchangeRate: patch.settlementExchangeRate,
-      settlementShareCnyHongKong: patch.settlementShareCnyHongKong,
-      settlementShareCnyWuhan: patch.settlementShareCnyWuhan,
-      settlementHongKongCostUsd: patch.settlementHongKongCostUsd,
-      settlementWuhanCostUsd: patch.settlementWuhanCostUsd,
-      settlementProfitUsd: patch.settlementProfitUsd,
-      settlementHongKongReceivableUsd: patch.settlementHongKongReceivableUsd,
-      settlementWuhanRetainedUsd: patch.settlementWuhanRetainedUsd,
-      settlementHongKongReceivableCny: patch.settlementHongKongReceivableCny,
-      settlementWuhanRetainedCny: patch.settlementWuhanRetainedCny,
-      settledAt: patch.settledAt
     }, fixedId);
-    await this.state.storage.put(`product:${product.id}`, product);
-    return product;
   }
 
   async clearProducts() {
@@ -2628,6 +2652,48 @@ function lossProductSnapshot(product = {}) {
   };
 }
 
+function settlementSnapshotForProduct(product = {}, rate) {
+  const settlementExchangeRate = positiveNumberOrNull(rate);
+  if (!settlementExchangeRate) throw new Error('结算时缺少有效汇率，请刷新后重试。');
+
+  const costs = Array.isArray(product.costs) ? product.costs : [];
+  const hongKongCost = costs.reduce((total, item) => item?.owner === 'wuhan' ? total : total + numberOrZero(item?.amount), 0);
+  const wuhanCost = costs.reduce((total, item) => item?.owner === 'wuhan' ? total + numberOrZero(item?.amount) : total, 0);
+  const settlementProfitUsd = numberOrZero(product.salePrice) - hongKongCost - wuhanCost;
+  const settlementHongKongReceivableUsd = hongKongCost + settlementProfitUsd / 2;
+  const settlementWuhanRetainedUsd = wuhanCost + settlementProfitUsd / 2;
+
+  return {
+    settlementExchangeRate,
+    settlementShareCnyHongKong: Number((settlementHongKongReceivableUsd * settlementExchangeRate).toFixed(2)),
+    settlementShareCnyWuhan: Number((settlementWuhanRetainedUsd * settlementExchangeRate).toFixed(2)),
+    settlementHongKongCostUsd: hongKongCost,
+    settlementWuhanCostUsd: wuhanCost,
+    settlementProfitUsd,
+    settlementHongKongReceivableUsd,
+    settlementWuhanRetainedUsd,
+    settlementHongKongReceivableCny: Number((settlementHongKongReceivableUsd * settlementExchangeRate).toFixed(2)),
+    settlementWuhanRetainedCny: Number((settlementWuhanRetainedUsd * settlementExchangeRate).toFixed(2))
+  };
+}
+
+function settlementSnapshotFields(product = {}) {
+  return {
+    settlementStatus: 'settled',
+    settledAt: cleanLine(product.settledAt),
+    settlementExchangeRate: positiveNumberOrNull(product.settlementExchangeRate),
+    settlementShareCnyHongKong: nullableNumber(product.settlementShareCnyHongKong),
+    settlementShareCnyWuhan: nullableNumber(product.settlementShareCnyWuhan),
+    settlementHongKongCostUsd: nullableNumber(product.settlementHongKongCostUsd),
+    settlementWuhanCostUsd: nullableNumber(product.settlementWuhanCostUsd),
+    settlementProfitUsd: nullableNumber(product.settlementProfitUsd),
+    settlementHongKongReceivableUsd: nullableNumber(product.settlementHongKongReceivableUsd),
+    settlementWuhanRetainedUsd: nullableNumber(product.settlementWuhanRetainedUsd),
+    settlementHongKongReceivableCny: nullableNumber(product.settlementHongKongReceivableCny),
+    settlementWuhanRetainedCny: nullableNumber(product.settlementWuhanRetainedCny)
+  };
+}
+
 function sanitizeProduct(input, id) {
   const now = new Date();
   const updatedAt = now.toLocaleTimeString('zh-CN', { hour12: false });
@@ -2655,6 +2721,8 @@ function sanitizeProduct(input, id) {
     costs: Array.isArray(input.costs) ? input.costs.map(sanitizeCost).filter(Boolean) : [],
     salePrice: numberOrZero(input.salePrice),
     saleTime: cleanLine(input.saleTime),
+    saleExchangeRate: positiveNumberOrNull(input.saleExchangeRate),
+    saleExchangeRateLockedAt: cleanLine(input.saleExchangeRateLockedAt),
     isSold: Boolean(input.isSold),
     isPaid: Boolean(input.isPaid),
     salesCustomerId: normalizeSalesCustomerId(input.salesCustomerId),
@@ -2924,6 +2992,8 @@ function mergeDuplicateProduct(base, duplicate) {
     'vpsPassword',
     'remark',
     'saleTime',
+    'saleExchangeRate',
+    'saleExchangeRateLockedAt',
     'salesCustomerId',
     'settledAt',
     'settlementExchangeRate',

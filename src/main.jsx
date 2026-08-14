@@ -402,6 +402,8 @@ function createBlankProduct(productType = defaultBusinessType) {
     costs: createBlankCosts(productType),
     salePrice: 0,
     saleTime: '',
+    saleExchangeRate: null,
+    saleExchangeRateLockedAt: '',
     isSold: false,
     isPaid: false,
     settlementStatus: 'unsettled',
@@ -615,6 +617,21 @@ function formatExchangeValue(value) {
 function normalizeExchangeRate(value) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : defaultExchangeRate;
+}
+
+function saleExchangeRateSnapshot(product) {
+  const rate = Number(product?.saleExchangeRate);
+  if (!Number.isFinite(rate) || rate <= 0) return null;
+  return {
+    rate,
+    lockedAt: String(product?.saleExchangeRateLockedAt || '').trim()
+  };
+}
+
+function saleExchangeRateLockLabel(lockedAt) {
+  const value = String(lockedAt || '').trim();
+  if (!value) return '记录时间未提供';
+  return value.replace('T', ' ').slice(0, 16);
 }
 
 function settlementCnySnapshot(settlement, rate) {
@@ -1817,6 +1834,8 @@ function App() {
       costs: createBlankCosts(normalizedType),
       salePrice: 0,
       saleTime: '',
+      saleExchangeRate: null,
+      saleExchangeRateLockedAt: '',
       isSold: false,
       isPaid: false,
       settlementStatus: 'unsettled',
@@ -2235,6 +2254,7 @@ function App() {
             product={activeProduct}
             user={currentUser}
             customers={salesCustomers}
+            exchangeRate={exchangeRate}
             onSaveCustomer={saveSalesCustomer}
             onSave={saveProduct}
             onSettle={settleProductStatus}
@@ -4360,7 +4380,7 @@ function SalesCustomerPicker({ product, customers = [], onSelect, onCreate }) {
   );
 }
 
-function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSettle, onOpenPhoneRenewals, onBack, backLabel, saving, onAuthExpired }) {
+function Workbench({ product, user, customers = [], exchangeRate, onSaveCustomer, onSave, onSettle, onOpenPhoneRenewals, onBack, backLabel, saving, onAuthExpired }) {
   const [draft, setDraft] = useState(product);
   const [dirty, setDirty] = useState(false);
   const [visible, setVisible] = useState({});
@@ -4369,6 +4389,7 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
   const [notice, setNotice] = useState('');
   const [settlementNotice, setSettlementNotice] = useState('');
   const [settling, setSettling] = useState(false);
+  const [lockingSaleRate, setLockingSaleRate] = useState(false);
   const [fullView, setFullView] = useState(null);
   const [authenticatorCode, setAuthenticatorCode] = useState({ code: '', seconds: 0, message: '' });
   const [smsFrameUrl, setSmsFrameUrl] = useState('');
@@ -4542,7 +4563,7 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
     setSettlementNotice('');
     commitChange({ [field]: value });
   };
-  const updateSaleStatus = (checked) => {
+  const updateSaleStatus = async (checked) => {
     if (checked && settlement.totalCost <= 0) {
       setNotice('请先填写成本后再标记售出，避免利润和分成被误算。');
       setSettlementNotice('请先填写成本后再进入结算。');
@@ -4553,10 +4574,26 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
       return;
     }
     setSettlementNotice('');
-    commitChange({
+    const patch = {
       isSold: checked,
       saleTime: checked && !draft.saleTime ? fromDateTimeInputValue(localDateTimeInput()) : draft.saleTime
-    });
+    };
+
+    if (checked && !saleExchangeRateSnapshot(draft)) {
+      setLockingSaleRate(true);
+      try {
+        const data = await apiJson(`/api/exchange-rate?t=${Date.now()}`);
+        patch.saleExchangeRate = normalizeExchangeRate(data.rate);
+      } catch {
+        patch.saleExchangeRate = normalizeExchangeRate(exchangeRate);
+        setNotice('实时汇率暂时读取失败，已按当前页面汇率锁定；可在保存前取消售出后重新勾选。');
+      } finally {
+        patch.saleExchangeRateLockedAt = new Date().toISOString();
+        setLockingSaleRate(false);
+      }
+    }
+
+    commitChange(patch);
   };
   const updatePaidStatus = (checked) => {
     if (checked && !draft.isSold) {
@@ -4830,6 +4867,10 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
   };
   const saveDraft = async () => {
     setNotice('');
+    if (lockingSaleRate) {
+      setNotice('正在锁定卖出时汇率，请稍候再保存。');
+      return;
+    }
     if (draft.isSold && !draft.salesCustomerId && (!product.isSold || product.salesCustomerId)) {
       setNotice('请先选择或新建销售对象，再保存销售登记。');
       return;
@@ -4853,8 +4894,8 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
           <span>{dirty ? '有未保存改动' : '已保存'}</span>
         </div>
         <div className="workbench-actions">
-          <button className="primary-button" type="button" disabled={saving || (!dirty && !isNewProduct)} onClick={saveDraft}>
-            <Save size={16} />{saving ? '保存中...' : isNewProduct ? '保存产品' : '保存修改'}
+          <button className="primary-button" type="button" disabled={saving || lockingSaleRate || (!dirty && !isNewProduct)} onClick={saveDraft}>
+            <Save size={16} />{saving ? '保存中...' : lockingSaleRate ? '锁定汇率中...' : isNewProduct ? '保存产品' : '保存修改'}
           </button>
         </div>
       </div>
@@ -5020,8 +5061,14 @@ function Workbench({ product, user, customers = [], onSaveCustomer, onSave, onSe
               />
               <Input label="售价（USD）" type="number" value={draft.salePrice} onChange={(value) => updateField('salePrice', value === '' ? '' : Number(value))} />
               <Input label="销售时间" type="datetime-local" value={toDateTimeInputValue(draft.saleTime)} onChange={(value) => updateField('saleTime', fromDateTimeInputValue(value))} />
-              <Toggle label="是否售出" checked={draft.isSold} onChange={updateSaleStatus} />
+              <Toggle label="是否售出" checked={draft.isSold} disabled={lockingSaleRate} onChange={updateSaleStatus} />
               <Toggle label="是否回款" checked={draft.isPaid} onChange={updatePaidStatus} />
+              {saleExchangeRateSnapshot(draft) && (
+                <div className="sale-rate-lock">
+                  <strong>销售锁定汇率</strong>
+                  <span>1 USD = {saleExchangeRateSnapshot(draft).rate.toFixed(4)} CNY · {saleExchangeRateLockLabel(saleExchangeRateSnapshot(draft).lockedAt)}</span>
+                </div>
+              )}
               <Textarea label="备注" value={draft.saleRemark || ''} copyable onOpenFull={openFullValue} onChange={(value) => updateField('saleRemark', value)} />
             </div>
           </Section>
@@ -5056,10 +5103,12 @@ function ProfitPreview({ product, settlement, onSettle, settling, settlementNoti
   const [cnyAmount, setCnyAmount] = useState('');
   const rateAvailable = Number.isFinite(exchangeRate) && exchangeRate > 0;
   const isSettled = product.settlementStatus === 'settled';
+  const saleRateSnapshot = saleExchangeRateSnapshot(product);
   const settlementSnapshot = productSettlementSnapshot(product, settlement);
-  const displayRate = isSettled && settlementSnapshot ? settlementSnapshot.rate : exchangeRate;
-  const displayHongKongCny = isSettled && settlementSnapshot ? settlementSnapshot.hongKong : settlement.hongKongReceivable * exchangeRate;
-  const displayWuhanCny = isSettled && settlementSnapshot ? settlementSnapshot.wuhan : settlement.wuhanRetained * exchangeRate;
+  const activeSettlementRate = saleRateSnapshot?.rate || exchangeRate;
+  const displayRate = isSettled && settlementSnapshot ? settlementSnapshot.rate : activeSettlementRate;
+  const displayHongKongCny = isSettled && settlementSnapshot ? settlementSnapshot.hongKong : settlement.hongKongReceivable * activeSettlementRate;
+  const displayWuhanCny = isSettled && settlementSnapshot ? settlementSnapshot.wuhan : settlement.wuhanRetained * activeSettlementRate;
 
   const loadExchangeRate = async (manual = false) => {
     setRateLoading(true);
@@ -5143,7 +5192,9 @@ function ProfitPreview({ product, settlement, onSettle, settling, settlementNoti
           {product.isSold
             ? (isSettled
               ? `已结算金额按结算时汇率 ${displayRate.toFixed(4)} 锁定；上方换算器可继续查看当前汇率。`
-              : '未结算时按进入页面/手动刷新得到的最新汇率实时折合，结算后会锁定本次 CNY 金额。')
+              : (saleRateSnapshot
+                ? `销售时已锁定汇率 ${saleRateSnapshot.rate.toFixed(4)}（${saleExchangeRateLockLabel(saleRateSnapshot.lockedAt)}）；本次结算将按此汇率。`
+                : '历史未结算记录尚无销售锁定汇率；结算时会按你确认的当刻汇率锁定。'))
             : '待售产品仅作利润预览，不进入待结算展示。'}
         </div>
         <PreviewLine icon={Send} label={product.isSold ? (isSettled ? '应结算香港 CNY' : '应结算香港折合 CNY') : '待售香港折合 CNY'} value={rateAvailable ? cny(displayHongKongCny) : '-'} />
@@ -5162,7 +5213,7 @@ function ProfitPreview({ product, settlement, onSettle, settling, settlementNoti
             className="primary-button full"
             type="button"
             disabled={settling}
-            onClick={() => onSettle({ rate: exchangeRate })}
+            onClick={() => onSettle({ rate: activeSettlementRate })}
           >
             {settling ? '结算中...' : '标记为已结算'}
           </button>
@@ -5455,11 +5506,11 @@ function SmsCodeModal({ url, onClose }) {
   );
 }
 
-function Toggle({ label, checked, onChange }) {
+function Toggle({ label, checked, onChange, disabled = false }) {
   return (
     <label className="toggle-label">
       <span>{label}</span>
-      <button className={`toggle ${checked ? 'checked' : ''}`} onClick={() => onChange(!checked)} type="button"><i /></button>
+      <button className={`toggle ${checked ? 'checked' : ''}`} disabled={disabled} onClick={() => onChange(!checked)} type="button"><i /></button>
     </label>
   );
 }

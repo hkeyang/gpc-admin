@@ -1333,6 +1333,9 @@ textarea { width: 100%; height: 34px; border: 0; resize: none; outline: 0; paddi
 }
 .cost-popover .close:hover { background: #f3f5fa; color: #5e697d; }
 .sale-grid { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(170px, 1fr) 90px 90px minmax(220px, 1.5fr); gap: 14px; align-items: end; }
+.sale-rate-lock { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 8px; margin-top: -4px; color: #657083; font-size: 12px; }
+.sale-rate-lock strong { color: #3b4a64; font-size: 12px; }
+.sale-rate-lock span { color: #7a879b; }
 .sales-customer-picker {
   grid-column: 1 / -1;
   display: grid;
