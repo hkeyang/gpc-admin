@@ -3034,7 +3034,7 @@ function ProductTable({ products, lossEvents = [], saleTimeSort, onSaleTimeSortC
     <table className="product-table product-list-table">
       <thead>
         <tr>
-          <th>ID</th><th>上架时间</th><th><SaleTimeSortButton sort={saleTimeSort} onChange={onSaleTimeSortChange} /></th><th>客户</th><th>账号</th><th>手机号</th><th>总成本</th><th>售价</th><th>利润</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
+          <th>ID</th><th>上架时间</th><th><SaleTimeSortButton sort={saleTimeSort} onChange={onSaleTimeSortChange} /></th><th>售卖汇率</th><th>客户</th><th>账号</th><th>手机号</th><th>总成本</th><th>售价</th><th>利润</th><th>库存状态</th><th>销售状态</th><th>回款状态</th><th>结算状态</th><th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -3047,11 +3047,16 @@ function ProductTable({ products, lossEvents = [], saleTimeSort, onSaleTimeSortC
           const phoneDisabled = phoneRenewalInfo(item).status === 'disabled';
           const rowAlertTone = phoneDisabled || afterSale?.tone === 'danger' ? 'critical' : afterSale ? 'warning' : '';
           const phone = item.phone ? formatPhoneNumber(item.phoneCode, item.phone) : '-';
+          const saleRateSnapshot = saleExchangeRateSnapshot(item);
+          const saleRateTitle = saleRateSnapshot
+            ? `销售锁定：1 USD = ${saleRateSnapshot.rate.toFixed(4)} CNY · ${saleExchangeRateLockLabel(saleRateSnapshot.lockedAt)}`
+            : item.isSold ? '历史销售未记录售卖时锁定汇率' : '产品尚未售出';
           return (
             <tr key={item.id} className={rowAlertTone ? `product-alert-row ${rowAlertTone}` : ''}>
               <td>{item.id}</td>
               <td title={productDateValue(item)}>{productListDateLabel(item.createdAt)}</td>
               <td title={String(item.saleTime || '')}>{productListDateLabel(item.saleTime)}</td>
+              <td title={saleRateTitle} className={saleRateSnapshot ? 'sale-rate-value' : 'sale-rate-missing'}>{saleRateSnapshot ? saleRateSnapshot.rate.toFixed(4) : item.isSold ? '历史未记录' : '-'}</td>
               <td><span className="customer-list-name" title={customer.zhanfuUsername || ''}>{customerName}</span></td>
               <td>
                 <span className="product-status-cell">
